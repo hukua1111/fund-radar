@@ -1,0 +1,11 @@
+{
+  "name": "fund-radar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "基金限额监控 · GitHub Actions 定时检查并通过 Bark 推送变化",
+  "scripts": {
+    "test": "node test.mjs",
+    "run": "node src/gh-run.js"
+  }
+}
