@@ -1,0 +1,48 @@
+name: 基金限额检查
+
+on:
+  schedule:
+    # UTC 03:00 = 北京时间 11:00
+    # GitHub 的定时不保证准点，通常会延迟几分钟到半小时，高峰期偶尔跳过
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 防止上一次还没跑完又触发一次，导致 state.json 互相覆盖
+concurrency:
+  group: fund-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 检查限额
+        env:
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+          FUNDS: ${{ vars.FUNDS || '005827,004243,161725' }}
+          ALWAYS_NOTIFY: ${{ vars.ALWAYS_NOTIFY || '0' }}
+        run: node src/gh-run.js
+
+      - name: 提交基线
+        run: |
+          if [ -z "$(git status --porcelain state.json)" ]; then
+            echo "基线没有变化，跳过提交"
+            exit 0
+          fi
+          git config user.name "fund-radar-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add state.json
+          git commit -m "chore: 更新基金限额基线 [skip ci]"
+          # 万一远端有新提交，先变基再推，避免 non-fast-forward 失败
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          git push
