@@ -1,7 +1,7 @@
 // 本地存储、数据获取、离线缓存
 // 云端快照来自 docs/data（Actions 每天生成），本地自选基金走东方财富的净值脚本。
 
-export const VERSION = '2.0.0';
+export const VERSION = '2.0.1';
 
 const K = {
   settings: 'fr.settings.v1',

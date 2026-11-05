@@ -1,7 +1,7 @@
 // Service Worker：离线可用 + 版本升级
 // 应用外壳走缓存优先，数据快照走网络优先（失败回退缓存）。
 
-const VERSION = '2.0.0';
+const VERSION = '2.0.1';
 const CACHE = `fund-radar-${VERSION}`;
 const ASSETS = [
   './',
@@ -32,6 +32,8 @@ self.addEventListener('install', (event) => {
       )
     )
   );
+  // 首次安装立即接管；更新时也会激活，页面收到 controllerchange 后自动刷新
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
