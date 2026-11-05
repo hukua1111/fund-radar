@@ -31,8 +31,8 @@ object EastMoneyApi {
     private const val LIST_URL = "https://fund.eastmoney.com/Data/Fund_JJJZ_Data.aspx"
     private const val FUND_PAGE = "https://fund.eastmoney.com/%s.html"
 
-    /** 深市/中证系列指数 + 沪市指数，两个 filter 合起来约 1k 条。 */
-    private val CATALOG_FILTERS = listOf("m:0+t:5", "m:1+s:5")
+    /** 深市/中证系列指数 + 沪市指数，两个 filter 合起来约 1.1k 条。 */
+    private val CATALOG_FILTERS = listOf("m:0+t:5", "m:1+s:3")
 
     /** Fund list, sorted by today's change, with purchase status included. */
     suspend fun fetchList(pageSize: Int, keyword: String = ""): List<Fund> {

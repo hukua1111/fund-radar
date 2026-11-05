@@ -27,24 +27,33 @@ data class TrackedIndex(
 private val PREFIXES = listOf("中证全指", "中证", "国证", "深证", "上证", "沪深")
 private val SUFFIXES = listOf("全收益", "净收益", "指数", "R")
 
+/** A name split into its publishing family (`中证`) and the rest (`煤炭等权`). */
+data class IndexNameParts(val prefix: String, val core: String)
+
 /**
- * Strips the words that differ between a fund's 跟踪标的 and the index quote
+ * Splits the words that differ between a fund's 跟踪标的 and the index quote
  * name: `中证煤炭等权指数` and `煤炭等权` are the same index.
+ *
+ * The family prefix is kept separately on purpose — 中证军工 and 国证军工 are
+ * different indices and must never be swapped for each other.
  */
-fun normalizeIndexName(raw: String): String {
+fun splitIndexName(raw: String): IndexNameParts {
     var text = raw.replace(" ", "").replace("　", "")
     text = text.replace(Regex("[（(][^）)]*[）)]"), "")
+
+    var prefix = ""
+    for (candidate in PREFIXES) {
+        if (text.startsWith(candidate) && text.length > candidate.length + 1) {
+            prefix = candidate
+            text = text.removePrefix(candidate)
+            break
+        }
+    }
+
     var changed = true
     var guard = 0
     while (changed && guard++ < 8) {
         changed = false
-        for (prefix in PREFIXES) {
-            if (text.startsWith(prefix) && text.length > prefix.length + 1) {
-                text = text.removePrefix(prefix)
-                changed = true
-                break
-            }
-        }
         for (suffix in SUFFIXES) {
             if (text.endsWith(suffix) && text.length > suffix.length + 1) {
                 text = text.removeSuffix(suffix)
@@ -53,29 +62,35 @@ fun normalizeIndexName(raw: String): String {
             }
         }
     }
-    return text
+    return IndexNameParts(prefix, text)
 }
+
+/** Family-free form of a name, used for display and matching. */
+fun normalizeIndexName(raw: String): String = splitIndexName(raw).core
 
 /**
  * Matches a 跟踪标的 name against the index catalogue. Only exact matches or
- * full containment count, so we never silently chart the wrong index.
+ * near-equal containment count, so we never silently chart the wrong index.
  */
 fun resolveIndex(trackedName: String, catalog: List<IndexEntry>): IndexEntry? {
-    val target = normalizeIndexName(trackedName)
-    if (target.isBlank()) return null
+    val target = splitIndexName(trackedName)
+    if (target.core.isBlank()) return null
 
     var best: IndexEntry? = null
     var bestScore = 0
     for (entry in catalog) {
-        val candidate = normalizeIndexName(entry.name)
-        if (candidate.isBlank()) continue
-        val score = when {
-            candidate == target -> 100
-            candidate.length >= 3 && target.contains(candidate) -> 60 + candidate.length
-            target.length >= 3 && candidate.contains(target) -> 50 + target.length
-            else -> 0
+        val candidate = splitIndexName(entry.name)
+        if (candidate.core.isBlank()) continue
+        // 中证 / 国证 / 沪深 是不同系列的指数，名字撞了也不能互相顶替
+        if (candidate.prefix.isNotEmpty() && candidate.prefix != target.prefix) continue
+
+        var score = when {
+            candidate.core == target.core -> 100
+            else -> containmentScore(target.core, candidate.core)
         }
         if (score == 0) continue
+        if (candidate.prefix.isNotEmpty() && candidate.prefix == target.prefix) score += 5
+
         val better = when {
             score > bestScore -> true
             score < bestScore -> false
@@ -87,6 +102,15 @@ fun resolveIndex(trackedName: String, catalog: List<IndexEntry>): IndexEntry? {
         }
     }
     return if (bestScore >= 60) best else null
+}
+
+private fun containmentScore(target: String, candidate: String): Int {
+    val shorter = if (candidate.length <= target.length) candidate else target
+    val longer = if (candidate.length <= target.length) target else candidate
+    if (shorter.length < 3 || !longer.contains(shorter)) return 0
+    // 长度差太多的不是同一个指数：新能源 ≠ 新能源汽车
+    if (shorter.length * 10 <= longer.length * 6) return 0
+    return if (candidate.length < target.length) 60 + candidate.length else 50 + target.length
 }
 
 private fun preferEntry(candidate: IndexEntry, current: IndexEntry?): Boolean {

@@ -57,6 +57,23 @@ class IndexNameTest {
     }
 
     @Test
+    fun neverSwapsIndexFamilies() {
+        // 中证军工 不能匹配到 国证军工
+        assertNull(resolveIndex("中证军工指数", listOf(IndexEntry("399368", 0, "国证军工"))))
+        // 沪深300 不能匹配到 深证300
+        val catalogue = listOf(IndexEntry("399007", 0, "深证300"), IndexEntry("399300", 0, "沪深300"))
+        assertEquals("399300", resolveIndex("沪深300指数", catalogue)?.code)
+        // 上证50 不能匹配到 深证50
+        assertNull(resolveIndex("上证50指数", listOf(IndexEntry("399850", 0, "深证50"))))
+    }
+
+    @Test
+    fun rejectsLooseContainment() {
+        // 中证新能源 ≠ 中证新能源汽车
+        assertNull(resolveIndex("中证新能源汽车指数", listOf(IndexEntry("000941", 1, "新能源"))))
+    }
+
+    @Test
     fun secidUsesMarketPrefix() {
         assertEquals("0.399998", IndexEntry("399998", 0, "中证煤炭").secid)
         assertEquals("1.000300", IndexEntry("000300", 1, "沪深300").secid)
