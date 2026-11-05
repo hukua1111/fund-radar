@@ -28,14 +28,21 @@
 
 ![限购变化](docs/screenshots/changes.png)
 
-## 指数页 · 自选基金跟踪的指数
+## 指数页 · 自选基金跟踪的指数 + 手动添加
 
 自选里的指数基金跟踪哪个指数，这里就列哪个（比如招商中证煤炭等权 LOF → 中证煤炭等权 399990）。
 一只指数一张卡片：名称、代码、多少只基金在跟踪、最新点位和日涨跌。**点开就是 K 线 + AI 波段判断。**
 
+想盯的指数没有对应基金？点右上角 **＋**，输入代码（`399997`）或名称（`中证白酒`）直接加进来，
+卡片上会标「手动添加」，随时可以移除。两种来源混在一起显示，同一个指数不会重复出现。
+
 | 指数列表 | 没有指数基金时 |
 | --- | --- |
 | ![指数](docs/screenshots/index-tab.png) | ![空态](docs/screenshots/index-empty.png) |
+
+| 添加指数（名称或代码都行） |
+| --- |
+| ![添加指数](docs/screenshots/add-index-sheet.png) |
 
 点开任意指数 → 日 K + MA5/10/20/60，一个按钮让 AI 结合均线判断现在该不该做波段：
 
@@ -49,12 +56,12 @@
 
 ## 安装
 
-`dist/FundRadar-1.2.0-release.apk`（已签名，支持 Android 7.0+ / API 24+）。
+`dist/FundRadar-1.3.0-release.apk`（已签名，支持 Android 7.0+ / API 24+）。
 传输到手机后直接安装，首次打开需要联网。
 
-`dist/FundRadar-1.2.0-debug.apk` 为调试版，便于 `adb logcat` 排查。
+`dist/FundRadar-1.3.0-debug.apk` 为调试版，便于 `adb logcat` 排查。
 
-**从 1.0.0 / 1.1.0 升级**：`applicationId` 和签名证书都没变（`app/release.keystore`），
+**从 1.0.0 / 1.1.0 / 1.2.0 升级**：`applicationId` 和签名证书都没变（`app/release.keystore`），
 直接覆盖安装即可，自选列表和设置全部保留，不需要先卸载。
 
 ## 怎么用
@@ -63,14 +70,17 @@
 2. 输入基金代码或名称（如 `161725`、`招商白酒`），从搜索结果里点 **+** 加入；
 3. 也可以直接点空页面上的热门基金一键添加；
 4. **基金**页：卡片点开是详情，详情底部有 **从自选移除**；
-5. **指数**页：点一张指数卡片 → K 线 → 底部 **让 AI 判断现在该不该做波段**。
+5. **指数**页：点右上角 **+** 可以手动添加任意指数（代码或名称都行），卡片上标「手动添加」，点「移除」删掉；
+6. 点一张指数卡片 → K 线 → 底部 **让 AI 判断现在该不该做波段**。
 
-自选列表保存在本地，重装应用才会丢失。指数列表不用手动维护，跟着自选走。
+自选列表保存在本地，重装应用才会丢失。基金跟踪的指数不用维护，跟着自选走；手动添加的指数一直保留，直到你移除。
 
 ### 开启 AI 判断（三步）
 
 1. 右上角 **齿轮** → 设置页；
 2. 填 AI 接口地址、模型、API Key（DeepSeek 默认 `https://api.deepseek.com/v1` + `deepseek-chat`，任何 OpenAI 兼容服务都行），点 **测试连接**；
+   - 自建的 `http://192.168.x.x:8080/v1`、`http://160.202.238.171:8080/v1` 也能用：应用已放开 http 明文（见下方「为什么能连 http」），
+     地址不带 `http://` 也行，会自动补全；填到 `/chat/completions` 也可以。
 3. 想收推送就再填 Bark 地址（`https://api.day.app/你的Key`），点 **发送测试推送** 确认能收到；
 4. 需要每天自动判断，就打开 **开启定时判断**，时间默认 `14:35`。
 
@@ -87,7 +97,10 @@
 - **深色模式**：完整明暗两套配色；`FundRadarTheme(dynamicColor = true)` 可开启 Android 12+ 动态取色。
 - **涨跌配色**：遵循国内习惯，红涨绿跌。
 - **底栏两个页签**：**基金**（限购）/ **指数**（行情），MD3 NavigationBar，返回键与手势导航都正常。
-- **指数页**：自动列出自选基金跟踪的指数（如 中证煤炭等权 `399990`），卡片显示最新点位与日涨跌，点开进 K 线。不用手动维护，跟着自选走。
+- **指数页**：自动列出自选基金跟踪的指数（如 中证煤炭等权 `399990`），卡片显示最新点位与日涨跌，点开进 K 线；
+  右上角 **＋** 也能手动添加任意指数（名称或代码搜索），手动项标「手动添加」并可移除，与基金推导出来的自动合并去重。
+- **指数搜索**：腾讯 smartbox 开放接口（同时认代码和名称，`v_hint` 里 `ZS` 类型即指数）为主，本地指数目录兜底；
+  只输 6 位代码也能加，添加前会用行情接口验证一次，画不出 K 线的代码不会进列表。
 - **K 线 + 均线**：指数日 K 蜡烛图叠加 MA5 / MA10 / MA20 / MA60，可切 60 / 120 / 250 日窗口（一次抓 250 天，切换不联网）。
 - **AI 波段判断**：K 线界面一个按钮，把最新点位、四条均线、相对 MA20 偏离度、近 5/20/60 日涨跌和最近 10 根 K 线发给 AI，返回「波段买入 / 波段卖出 / 观望 + 置信度 + 理由 + 风险」。AI 不常驻，点了才请求。
 - **每日自动判断 + Bark 推送**：到点抓一遍自选基金跟踪的指数，一次请求问完所有指数，结论推送到手机。
@@ -112,6 +125,23 @@
 
 目录里认不出来的跟踪标的会直接隐藏，绝不会画错指数的 K 线。
 主动管理型基金没有跟踪标的，自然也不会出现在指数页。
+
+### 手动添加的指数是怎么搜的
+
+东方财富的搜索接口对非浏览器客户端返回空，指数目录接口又只能「整表下载、不能按关键词查」，
+所以手动添加走**腾讯 smartbox**（`smartbox.gtimg.cn/s3/`）：这是一个开放、免鉴权的 suggest 接口，
+名称和代码都能搜，返回里 `ZS` 类型就是指数：
+
+```
+v_hint="sz~399997~中证白酒~zzbj~ZS^sh~000300~沪深300~hs300~ZS"
+       市场 代码    名称      拼音   类型
+```
+
+- `sh` → 东财 secid `1.xxx`，`sz` / `bj` → `0.xxx`，行情仍然走原来的东财 K 线接口；
+- 同名去重（沪深300 在沪深两边都有挂牌），只留一条；
+- 搜不到时回退到本地指数目录做名称/代码匹配，离线也能加已经缓存过的指数；
+- 只输 6 位数字且两边都没命中时，直接按代码试一次，`addIndex` 会先拉 5 根 K 线验证，
+  验证通过才写进列表——**画不出 K 线的代码加不进来**，名称也以行情接口返回的为准。
 
 ## K 线是怎么来的
 
@@ -168,12 +198,32 @@ AI 没配置、自选为空、没有指数基金、行情抓不到、接口报�
 
 ## 升级说明
 
-- `applicationId` 保持 `com.hukua.fundradar`，签名继续用 `app/release.keystore`（证书 SHA-256 未变），
-  所以 1.2.0 可以直接覆盖安装 1.0.0 / 1.1.0，自选和设置都留着；
-- `versionCode` 2 → 3，`versionName` 1.1.0 → 1.2.0；
-- 没有新增依赖，网络层依旧是 `HttpURLConnection` + `org.json`；
-- 详情缓存文件名从 `fund_detail_cache.json` 换成 `fund_detail_cache_v2.json`（多了跟踪标的字段），
-  首次刷新会重新抓一遍，属于正常现象。
+- **1.3.0**：`applicationId` 与签名证书不变，可直接覆盖安装 1.0.0 / 1.1.0 / 1.2.0，自选和设置全部保留；
+  - `versionCode` 3 → 4，`versionName` 1.2.0 → 1.3.0；
+  - 指数页新增「添加指数」（右上角 ＋），手动添加的指数存进 SharedPreferences 的 `manual_indices`，不会与基金推导出来的重复；
+  - 新增 `res/xml/network_security_config.xml`，`AndroidManifest` 里加了 `usesCleartextTraffic="true"`——
+    修复「测试连接」报 `Cleartext HTTP traffic to 192.168.x.x not permitted`；
+  - 没有新增依赖，网络层依旧 `HttpURLConnection` + `org.json`。
+
+## 为什么能连 http（明文）
+
+AI 接口和 Bark 地址都是你自己填的，自建的 OpenAI 兼容服务（Ollama / vLLM / one-api）经常跑在
+`http://192.168.x.x:11434` 这种内网明文端口上。Android 9（API 28）起默认禁止明文请求，
+报错就是 `Cleartext HTTP traffic to 160.202.238.171 not permitted`。
+
+应用因此在 `res/xml/network_security_config.xml` 里显式放开了 cleartext，并在清单里加了
+`android:usesCleartextTraffic="true"`（兼容 API 24–27）。代价是这台设备上所有 http 请求都不再被系统拦截，
+所以 API Key 仍只建议填给可信的服务。
+
+地址写歪了也会给具体原因，而不是抛一串英文异常：
+
+| 情况 | 提示 |
+| --- | --- |
+| 没写协议（`160.202.238.171:8080/v1`） | 自动补 `http://`（IP / localhost）或 `https://`（域名） |
+| 域名解析不了 | 找不到服务器 xxx，检查地址拼写 |
+| 端口没开 | 连不上 xxx，检查端口是否正确、服务是否在运行 |
+| Key 错 | AI 接口返回 HTTP 401：Key 无效或没有权限 |
+| 少了 `/v1` | AI 接口返回 HTTP 404：路径不对，常见原因是地址少了 /v1 |
 
 ## 数据来源
 
@@ -183,8 +233,9 @@ AI 没配置、自选为空、没有指数基金、行情抓不到、接口报�
 | --- | --- |
 | 单只基金：名称 / 净值 / 涨跌 / 申购状态 / 限额 / 起购 / 类型 / 费率 / 风险 / 公司 / 经理 / 规模 / 跟踪标的 | `fund.eastmoney.com/{code}.html` |
 | 添加基金时的搜索 | `fund.eastmoney.com/Data/Fund_JJJZ_Data.aspx` |
+| 添加指数时的搜索（名称 / 代码） | `smartbox.gtimg.cn/s3/`（腾讯，开放接口） |
 | 指数目录（名称 → 代码） | `push2.eastmoney.com/api/qt/clist/get` |
-| 指数日 K 线 | `push2his.eastmoney.com/api/qt/stock/kline/get` |
+| 指数日 K 线（点位 / 涨跌 / 开高低收） | `push2his.eastmoney.com/api/qt/stock/kline/get` |
 
 > 数据仅供研究参考，不构成任何投资建议。接口为第三方公开页面，可能随时变更或限流。
 
@@ -251,12 +302,14 @@ K 线图是自己用 Compose `Canvas` 画的（蜡烛、均线、坐标轴、网
 
 没有模拟器也能看到真实渲染结果：`ScreenshotTest` / `FeatureScreenshotTest` 用 Robolectric 原生图形在 JVM 上渲染 Compose，
 并把视图直接绘制成 PNG（`captureToImage()` 在 Robolectric 下不可用，所以走 `View.draw(Canvas)`）。
-覆盖亮色、暗色、骨架屏、空自选、添加面板、限购变化、指数页（含空态）、K 线（含 AI 结论 / 未配置 AI / 暗色）、设置页，
+覆盖亮色、暗色、骨架屏、空自选、添加面板、限购变化、指数页（含空态与手动添加）、添加指数面板、
+K 线（含 AI 结论 / 未配置 AI / 暗色）、设置页，
 另外会把语义树坐标写进 `tree*.txt`，方便核对布局。
 
 单元测试另外覆盖：均线计算（`KlineTest`）、AI 返回解析（`AiVerdictTest`，含代码块包裹、中文动作词、脏文本兜底）、
 定时延迟计算（`DailySchedulerTest`）、限额徽标与变化判定（`FundModelTest`）、
-跟踪标的名 → 指数代码的归一化与匹配（`IndexNameTest`）。
+跟踪标的名 → 指数代码的归一化与匹配（`IndexNameTest`）、
+smartbox 搜索结果解析 / 本地目录搜索 / AI 地址规范化（`IndexSearchTest`）。
 
 ## 目录结构
 
@@ -265,22 +318,24 @@ app/src/main/java/com/hukua/fundradar/
 ├── MainActivity.kt                 入口，edge-to-edge + 底栏两页签 + 列表/设置/K线 路由
 ├── data/
 │   ├── Fund.kt                     领域模型、限额状态推导、格式化工具
-│   ├── EastMoneyApi.kt             详情页（HTML）、列表接口、指数目录、指数K线
+│   ├── EastMoneyApi.kt             详情页（HTML）、列表接口、指数目录、指数K线、secid 可用性探测
 │   ├── FundRepository.kt           并发抓取、双层缓存、失败熔断
-│   ├── IndexCatalog.kt             指数目录模型 + 名称归一化/匹配 + 7 天磁盘缓存
-│   ├── IndexRepository.kt          自选 → 跟踪指数 → 最新点位
+│   ├── IndexCatalog.kt             指数目录模型 + 名称归一化/匹配 + 本地目录搜索 + 7 天磁盘缓存
+│   ├── IndexSearchApi.kt           腾讯 smartbox 指数搜索（名称 / 代码），解析 v_hint
+│   ├── IndexWatchStore.kt          手动添加的指数持久化（SharedPreferences）
+│   ├── IndexRepository.kt          自选 + 手动指数 → 最新点位，添加前校验行情
 │   ├── Kline.kt                    Candle / KlineSeries / 均线计算
-│   ├── AiAdvisor.kt                OpenAI 兼容调用、提示词、JSON 解析
+│   ├── AiAdvisor.kt                OpenAI 兼容调用、提示词、JSON 解析、错误信息中文化
 │   ├── BarkNotifier.kt             Bark 推送
-│   ├── SettingsStore.kt            AI / Bark / 定时配置持久化
+│   ├── SettingsStore.kt            AI / Bark / 定时配置持久化 + 地址规范化
 │   └── WatchlistStore.kt           自选列表持久化（SharedPreferences）
 ├── ui/
 │   ├── FundViewModel.kt            UiState / 筛选 / 添加 / 移除 / 详情状态机
 │   ├── FundListScreen.kt           顶栏、概览、筛选、列表、空态、添加面板
 │   ├── FundCard.kt                 卡片 + 限额徽标 + 指标单元格
 │   ├── FundDetailSheet.kt          MD3 ModalBottomSheet 详情
-│   ├── IndexViewModel.kt           指数列表加载状态机（并发取点位）
-│   ├── IndexScreen.kt              指数卡片列表 + 空态
+│   ├── IndexViewModel.kt           指数列表加载状态机 + 添加/移除手动指数
+│   ├── IndexScreen.kt              指数卡片列表 + 空态 + 添加指数面板
 │   ├── TabIcons.kt                 底栏两个手写描边图标（不引 material-icons-extended）
 │   ├── KlineViewModel.kt           K 线加载 / 窗口切换 / AI 判断状态机
 │   ├── KlineScreen.kt              蜡烛图 + 均线 + AI 结论卡片

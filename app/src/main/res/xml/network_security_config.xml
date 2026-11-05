@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The AI endpoint and the Bark server are user supplied: self hosted OpenAI
+  compatible services (Ollama / vLLM / one-api on a LAN box) very often listen
+  on plain http, and Android 9+ blocks cleartext traffic by default with
+  "Cleartext HTTP traffic to <ip> not permitted".
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

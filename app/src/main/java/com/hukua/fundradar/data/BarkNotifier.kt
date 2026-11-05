@@ -14,7 +14,7 @@ object BarkNotifier {
 
     suspend fun push(config: AiConfig, title: String, body: String): Boolean =
         withContext(Dispatchers.IO) {
-            val base = config.barkUrl.trim().trimEnd('/')
+            val base = normalizeBaseUrl(config.barkUrl)
             if (base.isEmpty()) return@withContext false
 
             val url = "$base/${encode(title)}/${encode(body)}"

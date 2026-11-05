@@ -17,7 +17,9 @@ import com.hukua.fundradar.data.KlineSeries
 import com.hukua.fundradar.data.KlineSource
 import com.hukua.fundradar.data.SwingAction
 import com.hukua.fundradar.data.TrackedIndex
+import com.hukua.fundradar.ui.AddIndexSheetContent
 import com.hukua.fundradar.ui.AppBottomBar
+import com.hukua.fundradar.ui.IndexAddState
 import com.hukua.fundradar.ui.IndexContent
 import com.hukua.fundradar.ui.IndexItem
 import com.hukua.fundradar.ui.IndexUiState
@@ -135,10 +137,36 @@ class FeatureScreenshotTest {
         save("index-empty")
     }
 
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun addIndexSheet() {
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                AddIndexSheetContent(
+                    state = IndexAddState(
+                        open = true,
+                        query = "白酒",
+                        results = listOf(
+                            IndexEntry("399997", 0, "中证白酒"),
+                            IndexEntry("399996", 0, "中证白酒指数")
+                        ),
+                        adding = "399996"
+                    ),
+                    onQueryChange = {},
+                    onAddIndex = {}
+                )
+            }
+        }
+        compose.waitForIdle()
+        save("add-index-sheet")
+        dump("tree-add-index.txt")
+    }
+
     private fun sampleIndexState(): IndexUiState {
         val coal = IndexEntry("399998", 0, "中证煤炭")
         val liquor = IndexEntry("399997", 0, "中证白酒")
         val semi = IndexEntry("980017", 0, "国证半导体芯片")
+        val hand = IndexEntry("000300", 1, "沪深300")
         return IndexUiState(
             loading = false,
             items = listOf(
@@ -153,6 +181,10 @@ class FeatureScreenshotTest {
                 IndexItem(
                     tracked = TrackedIndex(semi, "国证半导体芯片指数", listOf("008888")),
                     quote = IndexQuote(semi, 6120.55, 0.0, "2026-11-05")
+                ),
+                IndexItem(
+                    tracked = TrackedIndex(hand, "手动添加", emptyList(), manual = true),
+                    quote = IndexQuote(hand, 4012.88, 0.64, "2026-11-05")
                 )
             ),
             updatedAt = System.currentTimeMillis()

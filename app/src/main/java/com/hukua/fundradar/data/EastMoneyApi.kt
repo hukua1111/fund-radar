@@ -9,6 +9,11 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.zip.GZIPInputStream
 
+/** Result of checking a secid against the quote endpoint. */
+enum class IndexProbeStatus { OK, MISSING, UNREACHABLE }
+
+data class IndexProbe(val status: IndexProbeStatus, val name: String = "")
+
 /**
  * Client for the two public pages used by 天天基金 (eastmoney):
  *
@@ -268,6 +273,29 @@ object EastMoneyApi {
             candles = candles
         )
     }.getOrNull()
+
+    /**
+     * Checks whether a secid really has index quotes, telling "no such index"
+     * apart from "the network is down" — the add-index flow needs both.
+     */
+    suspend fun probeIndex(secid: String): IndexProbe = withContext(Dispatchers.IO) {
+        val url = "https://push2his.eastmoney.com/api/qt/stock/kline/get" +
+            "?secid=$secid" +
+            "&fields1=f1,f2,f3,f4,f5,f6" +
+            "&fields2=f51,f52,f53&klt=101&fqt=1&end=20500101&lmt=2&_=${System.currentTimeMillis()}"
+        try {
+            val data = JSONObject(httpGet(url, referer = "https://quote.eastmoney.com/"))
+                .optJSONObject("data")
+            val rows = data?.optJSONArray("klines")
+            if (data == null || rows == null || rows.length() == 0) {
+                IndexProbe(IndexProbeStatus.MISSING)
+            } else {
+                IndexProbe(IndexProbeStatus.OK, data.optString("name"))
+            }
+        } catch (error: Exception) {
+            IndexProbe(IndexProbeStatus.UNREACHABLE)
+        }
+    }
 
     /**
      * Every quotable index (~1k rows). The search endpoint used by the website

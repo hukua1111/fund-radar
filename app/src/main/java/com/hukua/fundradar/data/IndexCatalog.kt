@@ -17,11 +17,13 @@ data class IndexEntry(
     val displayName: String get() = name
 }
 
-/** An index that at least one watchlist fund tracks. */
+/** An index that at least one watchlist fund tracks, or that the user added. */
 data class TrackedIndex(
     val entry: IndexEntry,
     val trackedName: String,
-    val fundCodes: List<String> = emptyList()
+    val fundCodes: List<String> = emptyList(),
+    /** True when the row was added by hand on the 指数 tab. */
+    val manual: Boolean = false
 )
 
 private val PREFIXES = listOf("中证全指", "中证", "国证", "深证", "上证", "沪深")
@@ -99,6 +101,40 @@ fun resolveIndex(trackedName: String, catalog: List<IndexEntry>): IndexEntry? {
         }
     }
     return if (bestScore >= MIN_SCORE) best else null
+}
+
+/**
+ * Offline fallback for the "添加指数" search box: matches the local catalogue
+ * by exact / prefix code and by name, ranking the same publishing family first.
+ */
+fun searchCatalog(
+    query: String,
+    catalog: List<IndexEntry>,
+    limit: Int = 25
+): List<IndexEntry> {
+    val keyword = query.trim().replace(" ", "")
+    if (keyword.isEmpty()) return emptyList()
+    val target = splitIndexName(keyword)
+    if (target.core.isEmpty()) return emptyList()
+
+    val ranked = catalog.mapNotNull { entry ->
+        val candidate = splitIndexName(entry.name)
+        if (candidate.core.isEmpty()) return@mapNotNull null
+        val base = when {
+            entry.code == keyword -> 100
+            keyword.length >= 3 && entry.code.startsWith(keyword) -> 90
+            candidate.core == target.core -> 80
+            target.core.length >= 2 && candidate.core.contains(target.core) -> 60
+            else -> return@mapNotNull null
+        }
+        val bonus = if (target.prefix.isNotEmpty() && candidate.prefix == target.prefix) 5 else 0
+        entry to (base + bonus)
+    }.sortedWith(
+        compareByDescending<Pair<IndexEntry, Int>> { it.second }
+            .thenBy { it.first.code }
+    )
+
+    return ranked.take(limit).map { it.first }
 }
 
 private const val MIN_SCORE = 45

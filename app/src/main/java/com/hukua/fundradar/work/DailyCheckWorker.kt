@@ -36,9 +36,10 @@ class DailyCheckWorker(
         }
 
         val repository = IndexRepository(applicationContext)
-        val tracked = runCatching { repository.tracked() }.getOrDefault(emptyList())
+        // Fund driven indices plus the ones the user added by hand on 指数 tab.
+        val tracked = runCatching { repository.tracked() }.getOrNull()?.items.orEmpty()
         if (tracked.isEmpty()) {
-            notify(config, "没有可判断的指数", "自选里的基金没有跟踪指数，先去「基金」添加指数基金")
+            notify(config, "没有可判断的指数", "自选里的基金没有跟踪指数，先去「基金」添加指数基金，或在「指数」页手动添加")
             scheduleNext(config)
             return Result.success()
         }

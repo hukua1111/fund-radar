@@ -248,31 +248,72 @@ object AiAdvisor {
         value?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "无"
 
     private fun postJson(url: String, apiKey: String, body: String): String {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 90_000
-            requestMethod = "POST"
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Authorization", "Bearer ${apiKey.trim()}")
+        val connection = try {
+            (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15_000
+                readTimeout = 90_000
+                requestMethod = "POST"
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Authorization", "Bearer ${apiKey.trim()}")
+            }
+        } catch (error: Exception) {
+            throw friendlyError(error, url)
         }
+
         try {
             connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
             if (code !in 200..299) {
-                val detail = runCatching {
-                    JSONObject(text).optJSONObject("error")?.optString("message")
-                }.getOrNull().orEmpty()
-                throw IllegalStateException(
-                    "AI 接口返回 HTTP $code" + if (detail.isNotBlank()) "：$detail" else ""
-                )
+                throw IllegalStateException(httpMessage(code, errorDetail(text)))
             }
             return text
+        } catch (error: Exception) {
+            if (error is IllegalStateException && error.message?.startsWith("AI 接口") == true) throw error
+            throw friendlyError(error, url)
         } finally {
             connection.disconnect()
         }
+    }
+
+    /** Pulls the human readable bit out of an OpenAI style error body. */
+    private fun errorDetail(body: String): String {
+        if (body.isBlank()) return ""
+        val json = runCatching { JSONObject(body) }.getOrNull() ?: return body.take(120)
+        return json.optJSONObject("error")?.optString("message").orEmpty()
+            .ifBlank { json.optString("message") }
+            .ifBlank { json.optString("detail") }
+            .take(120)
+    }
+
+    private fun httpMessage(code: Int, detail: String): String {
+        val base = when (code) {
+            401, 403 -> "AI 接口返回 HTTP $code：Key 无效或没有权限"
+            404 -> "AI 接口返回 HTTP 404：路径不对，常见原因是地址少了 /v1"
+            429 -> "AI 接口返回 HTTP 429：请求太频繁，稍后再试"
+            in 500..599 -> "AI 服务端错误（HTTP $code）"
+            else -> "AI 接口返回 HTTP $code"
+        }
+        return if (detail.isNotBlank()) "$base（$detail）" else base
+    }
+
+    /** Turns transport level failures into something a user can act on. */
+    private fun friendlyError(error: Throwable, url: String): IllegalStateException {
+        val host = url.substringAfter("://", url).substringBefore('/').substringBefore('?')
+        val message = when {
+            // Android 9+ blocks plain http unless the network security config allows it.
+            error.message?.contains("Cleartext", ignoreCase = true) == true ->
+                "系统拦截了这个地址的 http 明文请求。如果是你自己的服务，请确认地址写对了（有没有多写 / 少写 s）"
+            error is java.net.UnknownHostException -> "找不到服务器 $host，检查地址拼写"
+            error is java.net.SocketTimeoutException -> "连接 $host 超时，检查地址、端口和网络"
+            error is java.net.ConnectException -> "连不上 $host，检查端口是否正确、服务是否在运行"
+            error is java.net.MalformedURLException -> "接口地址格式不正确：$url"
+            error is javax.net.ssl.SSLException -> "HTTPS 证书校验失败（$host），确认证书有效或改用 http"
+            else -> error.message ?: error.javaClass.simpleName
+        }
+        return IllegalStateException(message)
     }
 }

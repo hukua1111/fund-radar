@@ -12,8 +12,15 @@ data class IndexQuote(
     val date: String
 )
 
+/** What the 指数 tab shows, plus whether the catalogue itself failed. */
+data class TrackedResult(
+    val items: List<TrackedIndex>,
+    val catalogFailed: Boolean = false
+)
+
 /**
- * Turns the watchlist into the list of indices those funds track.
+ * Turns the watchlist into the list of indices those funds track, and keeps the
+ * indices the user added by hand on top of that.
  *
  * The fund page only carries the index *name* (跟踪标的), so the name is matched
  * against the local index catalogue to get a quotable secid.
@@ -22,12 +29,24 @@ class IndexRepository(context: Context) {
 
     private val appContext = context.applicationContext
     private val funds = FundRepository(appContext)
+    private val manual = IndexWatchStore(appContext)
 
-    suspend fun tracked(): List<TrackedIndex> = withContext(Dispatchers.IO) {
-        val catalog = IndexCatalog.load(appContext)
-        check(catalog.isNotEmpty()) { "指数目录下载失败，检查网络后重试" }
+    suspend fun tracked(): TrackedResult = withContext(Dispatchers.IO) {
+        val manualItems = manual.entries().map {
+            TrackedIndex(it, MANUAL_LABEL, emptyList(), manual = true)
+        }
 
         val watchlist = funds.load().funds
+        if (watchlist.isEmpty()) {
+            return@withContext TrackedResult(manualItems)
+        }
+
+        val catalog = IndexCatalog.load(appContext)
+        if (catalog.isEmpty()) {
+            // The fund driven part cannot be resolved; hand added indices still can.
+            return@withContext TrackedResult(manualItems, catalogFailed = true)
+        }
+
         val byName = LinkedHashMap<String, MutableList<String>>()
         watchlist.forEach { fund ->
             val tracked = fund.trackIndex.trim()
@@ -45,7 +64,10 @@ class IndexRepository(context: Context) {
                 existing.copy(fundCodes = (existing.fundCodes + codes).distinct())
             }
         }
-        merged.values.sortedBy { it.entry.name }
+
+        val auto = merged.values.sortedBy { it.entry.name }
+        val autoSecids = auto.map { it.entry.secid }.toSet()
+        TrackedResult(auto + manualItems.filterNot { it.entry.secid in autoSecids })
     }
 
     suspend fun quote(entry: IndexEntry): IndexQuote? = withContext(Dispatchers.IO) {
@@ -64,7 +86,81 @@ class IndexRepository(context: Context) {
     suspend fun series(entry: IndexEntry, limit: Int = 250): KlineSeries? =
         withContext(Dispatchers.IO) { EastMoneyApi.fetchIndexKline(entry.secid, limit) }
 
+    // ------------------------------------------------------- manual indices
+
+    fun isManual(secid: String): Boolean = manual.contains(secid)
+
+    fun removeIndex(secid: String) = manual.remove(secid)
+
+    /**
+     * Validates the index against the quote endpoint before saving it, so the
+     * list never contains a row whose K line cannot be drawn. The name returned
+     * by the quote endpoint wins — it is the authoritative short name.
+     *
+     * When the endpoint cannot be reached at all we do not block the user: a
+     * row picked from the search results is trusted and will simply show
+     * "暂无行情" until the network is back. A bare code typed by hand still
+     * needs a successful check, otherwise every typo would land in the list.
+     */
+    suspend fun addIndex(entry: IndexEntry): IndexEntry? = withContext(Dispatchers.IO) {
+        if (manual.contains(entry.secid)) return@withContext entry
+
+        val typedCode = entry.name == entry.code
+        val candidates = if (typedCode) {
+            // A bare code: try the likely venue first, then the other one.
+            listOf(entry, entry.copy(market = 1 - entry.market))
+        } else {
+            listOf(entry)
+        }
+
+        var unreachable = false
+        for (candidate in candidates) {
+            val probe = EastMoneyApi.probeIndex(candidate.secid)
+            when (probe.status) {
+                IndexProbeStatus.OK -> {
+                    val resolved = candidate.copy(name = probe.name.ifBlank { candidate.name })
+                    manual.add(resolved)
+                    return@withContext resolved
+                }
+
+                IndexProbeStatus.MISSING -> Unit
+                IndexProbeStatus.UNREACHABLE -> unreachable = true
+            }
+        }
+
+        if (unreachable && !typedCode) {
+            manual.add(entry)
+            return@withContext entry
+        }
+        null
+    }
+
+    /**
+     * Search for the "添加指数" sheet: Tencent smartbox first (it answers names
+     * and codes), local catalogue as the offline fallback. A bare 6-digit code
+     * that neither source knows is offered as a candidate — [addIndex] verifies
+     * it against the quote endpoint before it is saved.
+     */
+    suspend fun search(query: String): List<IndexEntry> = withContext(Dispatchers.IO) {
+        val keyword = query.trim()
+        if (keyword.isEmpty()) return@withContext emptyList()
+
+        val remote = runCatching { IndexSearchApi.search(keyword) }.getOrDefault(emptyList())
+        if (remote.isNotEmpty()) return@withContext remote
+
+        val catalog = runCatching { IndexCatalog.load(appContext) }.getOrDefault(emptyList())
+        val local = searchCatalog(keyword, catalog)
+        if (local.isNotEmpty()) return@withContext local
+
+        if (keyword.length == 6 && keyword.all { it.isDigit() }) {
+            val market = if (keyword.startsWith("5") || keyword.startsWith("6")) 1 else 0
+            return@withContext listOf(IndexEntry(keyword, market, keyword))
+        }
+        emptyList()
+    }
+
     private companion object {
         const val QUOTE_BARS = 5
+        const val MANUAL_LABEL = "手动添加"
     }
 }
