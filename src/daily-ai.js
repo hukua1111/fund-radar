@@ -201,12 +201,16 @@ for (const code of codes) {
 
 const failed = records.filter((r) => !r || !r.ok).map((r) => r && r.code).filter(Boolean);
 
+// 只有真的拿到过 AI 结论，才算“云端 AI 已启用”，避免 Key 失效时误报
+const aiOk = fundsOut.some((f) => f.ind && f.ind.source === 'ai');
+
 const fundsDoc = {
   version: 2,
   updatedAt: generatedAt,
   updatedAtText: bjNow(generatedAt),
   dataDate: fundsOut.reduce((acc, f) => (f.navDate && f.navDate > (acc || '') ? f.navDate : acc), null),
-  aiEnabled: isConfigured(aiConfig) && aiTargets.length > 0,
+  aiEnabled: aiOk,
+  aiModel: aiOk ? aiConfig.model : null,
   funds: fundsOut,
   failed,
 };
@@ -284,8 +288,8 @@ const latestDoc = {
   date: bjDate(generatedAt),
   at: generatedAt,
   atText: bjNow(generatedAt),
-  model: isConfigured(aiConfig) ? aiConfig.model : null,
-  aiEnabled: isConfigured(aiConfig) && aiTargets.length > 0,
+  model: aiOk ? aiConfig.model : null,
+  aiEnabled: aiOk,
   stat,
   items,
   failed,
