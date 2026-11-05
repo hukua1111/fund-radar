@@ -2,6 +2,8 @@
 
 一个基于 **Material Design 3（Material You）** 的安卓基金限额监控应用。
 
+**[⬇ 下载最新安装包（v1.3.0）](https://github.com/hukua1111/fund-radar/releases/latest)** —— 点开 `FundRadar-1.3.0-release.apk` 即可安装。
+
 **只看你关心的基金**：主界面完全由自选列表驱动，不喜欢的基金不会出现。底部两个页签 —— **基金** 看限购，**指数** 看行情。
 
 ## 基金页 · 一只基金一张卡片
