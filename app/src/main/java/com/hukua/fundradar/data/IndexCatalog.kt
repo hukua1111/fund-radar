@@ -84,10 +84,7 @@ fun resolveIndex(trackedName: String, catalog: List<IndexEntry>): IndexEntry? {
         // 中证 / 国证 / 沪深 是不同系列的指数，名字撞了也不能互相顶替
         if (candidate.prefix.isNotEmpty() && candidate.prefix != target.prefix) continue
 
-        var score = when {
-            candidate.core == target.core -> 100
-            else -> containmentScore(target.core, candidate.core)
-        }
+        var score = matchScore(target.core, candidate.core)
         if (score == 0) continue
         if (candidate.prefix.isNotEmpty() && candidate.prefix == target.prefix) score += 5
 
@@ -101,16 +98,29 @@ fun resolveIndex(trackedName: String, catalog: List<IndexEntry>): IndexEntry? {
             bestScore = score
         }
     }
-    return if (bestScore >= 60) best else null
+    return if (bestScore >= MIN_SCORE) best else null
 }
 
-private fun containmentScore(target: String, candidate: String): Int {
+private const val MIN_SCORE = 45
+
+private fun matchScore(target: String, candidate: String): Int {
+    if (candidate == target) return 100
+
     val shorter = if (candidate.length <= target.length) candidate else target
     val longer = if (candidate.length <= target.length) target else candidate
-    if (shorter.length < 3 || !longer.contains(shorter)) return 0
-    // 长度差太多的不是同一个指数：新能源 ≠ 新能源汽车
-    if (shorter.length * 10 <= longer.length * 6) return 0
-    return if (candidate.length < target.length) 60 + candidate.length else 50 + target.length
+    if (shorter.length >= 3 && longer.contains(shorter) && shorter.length * 10 > longer.length * 6) {
+        return if (candidate.length < target.length) 60 + candidate.length else 50 + target.length
+    }
+
+    // 目录里用简称：国证半导体芯片指数 → 国证芯片
+    if (candidate.length >= 2 &&
+        target.length > candidate.length &&
+        target.endsWith(candidate) &&
+        target.length - candidate.length <= 4
+    ) {
+        return 45
+    }
+    return 0
 }
 
 private fun preferEntry(candidate: IndexEntry, current: IndexEntry?): Boolean {

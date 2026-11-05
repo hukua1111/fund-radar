@@ -74,6 +74,14 @@ class IndexNameTest {
     }
 
     @Test
+    fun resolvesAbbreviatedCatalogueNames() {
+        // 目录里国证半导体芯片指数写作「国证芯片」
+        assertEquals("980017", resolveIndex("国证半导体芯片指数", listOf(IndexEntry("980017", 0, "国证芯片")))?.code)
+        // 「新能源车」不是「新能源汽车」的后缀，仍然不匹配
+        assertNull(resolveIndex("中证新能源汽车指数", listOf(IndexEntry("399417", 0, "新能源车"))))
+    }
+
+    @Test
     fun secidUsesMarketPrefix() {
         assertEquals("0.399998", IndexEntry("399998", 0, "中证煤炭").secid)
         assertEquals("1.000300", IndexEntry("000300", 1, "沪深300").secid)
