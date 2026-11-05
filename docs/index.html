@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>基金雷达 · K线与波段判断</title>
+    <meta name="description" content="基金净值K线、MA20 波段信号与 AI 判断，每天 14:35 自动跑一次并推送到 Bark。" />
+    <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="基金雷达" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/icon-192.png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <header class="topbar" id="topbar">
+        <div class="topbar-inner">
+          <button class="icon-btn hidden" id="backBtn" aria-label="返回">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+          </button>
+          <div class="title-wrap">
+            <h1 id="pageTitle">基金雷达</h1>
+            <p id="pageSub" class="sub"></p>
+          </div>
+          <button class="icon-btn" id="actionBtn" aria-label="刷新">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7M20 5v6h-6" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <main id="view" class="view"></main>
+
+      <nav class="tabbar" id="tabbar">
+        <button data-tab="list" class="tab active">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9m5 10V5m5 14v-7m5 7V8" /></svg>
+          <span>雷达</span>
+        </button>
+        <button data-tab="settings" class="tab">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" /><path d="M12 3v2.2M12 18.8V21M4.2 7.5l1.9 1.1M17.9 15.4l1.9 1.1M19.8 7.5l-1.9 1.1M6.1 15.4l-1.9 1.1" /></svg>
+          <span>设置</span>
+        </button>
+      </nav>
+
+      <div class="toast" id="toast" role="status"></div>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

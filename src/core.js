@@ -3,6 +3,9 @@
 
 export const API = 'https://fundmobapi.eastmoney.com/FundMNewApi/FundMNNBasicInformation';
 
+// 历史净值（日频），同样只认 App UA
+export const HISTORY_API = 'https://fundmobapi.eastmoney.com/FundMNewApi/FundMNHisNetList';
+
 // 关键：东方财富按 UA 黑名单拦截浏览器。必须用 App 身份请求，否则返回「网络繁忙」。
 export const UA = 'EMProjJijin/6.2.8 (iPhone; iOS 16.0; Scale/3.00)';
 
@@ -55,11 +58,46 @@ export async function fetchFund(code, fetchImpl = fetch) {
       code,
       ok: true,
       name: d.SHORTNAME || code,
+      type: d.FTYPE || '',
       sgzt: d.SGZT || '',
       maxsg: d.MAXSG,
       minsg: d.MINSG,
       nav: d.DWJZ,
+      navDate: d.PDATE || '',
     };
+  } catch (e) {
+    return { code, ok: false, error: String((e && e.message) || e).slice(0, 120) };
+  }
+}
+
+/**
+ * 拉取一只基金的历史净值（升序）。
+ * 接口按日期倒序返回，这里统一反转，方便后面算均线。
+ */
+export async function fetchHistory(code, opts = {}) {
+  const { pageSize = 500, fetchImpl = fetch } = opts;
+  const url = `${HISTORY_API}?FCODE=${code}&pageIndex=1&pageSize=${pageSize}&deviceid=Wap&plat=Wap&product=EFund&version=2.0.0`;
+  try {
+    const res = await fetchImpl(url, {
+      headers: { 'User-Agent': UA, Accept: 'application/json' },
+    });
+    if (!res.ok) return { code, ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    const list = data && data.Datas;
+    if (!Array.isArray(list) || !list.length) {
+      return { code, ok: false, error: (data && data.ErrMsg) || '无历史净值' };
+    }
+    const klines = list
+      .map((d) => ({
+        d: String(d.FSRQ || '').slice(0, 10),
+        c: Number(d.DWJZ),
+        chg: d.JZZZL === '--' || d.JZZZL == null ? null : Number(d.JZZZL),
+        acc: Number(d.LJJZ) || null,
+      }))
+      .filter((k) => k.d && Number.isFinite(k.c) && k.c > 0)
+      .sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+    if (!klines.length) return { code, ok: false, error: '历史净值解析为空' };
+    return { code, ok: true, klines };
   } catch (e) {
     return { code, ok: false, error: String((e && e.message) || e).slice(0, 120) };
   }

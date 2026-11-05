@@ -1,0 +1,56 @@
+name: 每日波段判断
+
+# 北京时间 14:35（UTC 06:35）跑一次：算指标 → 调 AI → 更新页面数据 → 推 Bark
+# 选 14:35 是因为场外基金 15:00 前申购当天确认，判断完还来得及下单。
+on:
+  schedule:
+    - cron: '35 6 * * *'
+  workflow_dispatch:
+    inputs:
+      skip_push:
+        description: '只更新数据、不发 Bark 推送'
+        required: false
+        default: '0'
+
+permissions:
+  contents: write
+
+# 和限额检查共用同一把锁，避免两个任务同时改仓库
+concurrency:
+  group: fund-check
+  cancel-in-progress: false
+
+jobs:
+  judge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 计算指标并判断
+        env:
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+          AI_KEY: ${{ secrets.AI_KEY }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL || 'https://api.deepseek.com/v1' }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'deepseek-chat' }}
+          FUNDS: ${{ vars.FUNDS || '005827,004243,161725' }}
+          AI_NOTIFY: ${{ vars.AI_NOTIFY || 'all' }}
+          SKIP_PUSH: ${{ github.event.inputs.skip_push == '1' && '1' || '0' }}
+        run: node src/daily-ai.js
+
+      - name: 提交数据快照
+        run: |
+          if [ -z "$(git status --porcelain docs/data)" ]; then
+            echo "数据没有变化，跳过提交"
+            exit 0
+          fi
+          git config user.name "fund-radar-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/data
+          git commit -m "chore: 更新净值与波段判断 [skip ci]"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          git push

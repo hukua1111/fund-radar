@@ -1,11 +1,17 @@
 {
   "name": "fund-radar",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "基金限额监控 · GitHub Actions 定时检查并通过 Bark 推送变化",
+  "description": "基金雷达 · 限额监控 + 净值K线 + MA20 波段判断 + AI 复核，GitHub Actions 定时运行",
   "scripts": {
     "test": "node test.mjs",
-    "run": "node src/gh-run.js"
+    "run": "node src/gh-run.js",
+    "ai": "node src/daily-ai.js",
+    "icons": "node tools/gen-icons.mjs",
+    "serve": "node tools/serve.mjs"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
