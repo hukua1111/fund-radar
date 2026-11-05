@@ -40,7 +40,9 @@ data class Fund(
     val rate: String = "",
     val sourceRate: String = "",
     val riskLevel: Int = 0,
-    val navDate: String = ""
+    val navDate: String = "",
+    /** Name of the index this fund tracks, e.g. 中证煤炭等权指数. Empty for 主动型. */
+    val trackIndex: String = ""
 ) {
     val limitType: LimitType
         get() = when {
@@ -88,7 +90,8 @@ data class Fund(
         maxBuy = detail.maxBuy ?: maxBuy,
         rate = detail.rate.ifBlank { rate },
         sourceRate = detail.sourceRate.ifBlank { sourceRate },
-        riskLevel = if (detail.riskLevel > 0) detail.riskLevel else riskLevel
+        riskLevel = if (detail.riskLevel > 0) detail.riskLevel else riskLevel,
+        trackIndex = detail.trackIndex.ifBlank { trackIndex }
     )
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -106,6 +109,7 @@ data class Fund(
         put("sourceRate", sourceRate)
         put("riskLevel", riskLevel)
         put("navDate", navDate)
+        put("trackIndex", trackIndex)
     }
 
     companion object {
@@ -125,7 +129,8 @@ data class Fund(
             rate = json.optString("rate"),
             sourceRate = json.optString("sourceRate"),
             riskLevel = json.optInt("riskLevel", 0),
-            navDate = json.optString("navDate")
+            navDate = json.optString("navDate"),
+            trackIndex = json.optString("trackIndex")
         )
     }
 }
@@ -147,7 +152,8 @@ data class FundDetail(
     val company: String = "",
     val manager: String = "",
     val established: String = "",
-    val scale: String = ""
+    val scale: String = "",
+    val trackIndex: String = ""
 ) {
     fun toFund(code: String): Fund = Fund(
         code = code,
@@ -162,7 +168,8 @@ data class FundDetail(
         rate = rate,
         sourceRate = sourceRate,
         riskLevel = riskLevel,
-        navDate = navDate
+        navDate = navDate,
+        trackIndex = trackIndex
     )
 
     fun toExtra(): FundExtra = FundExtra(

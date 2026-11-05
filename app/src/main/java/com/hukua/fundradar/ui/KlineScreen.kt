@@ -59,7 +59,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hukua.fundradar.data.Candle
 import com.hukua.fundradar.data.KlineSeries
-import com.hukua.fundradar.data.KlineSource
 import com.hukua.fundradar.data.SwingAction
 import com.hukua.fundradar.data.growthText
 import com.hukua.fundradar.data.priceText
@@ -139,9 +138,7 @@ fun KlineContent(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = state.series?.let {
-                                state.code + " · " + if (it.source == KlineSource.EXCHANGE) "场内K线" else "场外净值"
-                            } ?: state.code,
+                            text = state.code + " · 指数日K",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -494,7 +491,7 @@ private fun AiSection(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "还没有配置 AI 接口。填入任意 OpenAI 兼容的地址与 Key 后，就能让它结合 MA20 等均线给出波段建议。",
+                    text = "还没有配置 AI 接口。填入任意 OpenAI 兼容的地址与 Key 后，就能让它结合 MA20 等均线判断这个指数现在适不适合做波段。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

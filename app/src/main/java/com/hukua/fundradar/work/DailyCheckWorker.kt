@@ -4,21 +4,20 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.hukua.fundradar.data.AiAdvisor
-import com.hukua.fundradar.data.BatchItem
+import com.hukua.fundradar.data.AiConfig
 import com.hukua.fundradar.data.BarkNotifier
-import com.hukua.fundradar.data.EastMoneyApi
-import com.hukua.fundradar.data.FundRepository
+import com.hukua.fundradar.data.BatchItem
+import com.hukua.fundradar.data.IndexRepository
 import com.hukua.fundradar.data.SettingsStore
 import com.hukua.fundradar.data.SwingAction
-import com.hukua.fundradar.data.WatchlistStore
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * Runs once a day at the configured time: pulls the K line of every watchlist
- * fund, asks the AI in a single batched request, and pushes the summary through
- * Bark. Always schedules the next run, even when it fails.
+ * Runs once a day at the configured time: pulls the K line of every index the
+ * watchlist tracks, asks the AI in a single batched request, and pushes the
+ * summary through Bark. Always schedules the next run, even when it fails.
  */
 class DailyCheckWorker(
     appContext: Context,
@@ -36,23 +35,22 @@ class DailyCheckWorker(
             return Result.success()
         }
 
-        val codes = WatchlistStore(applicationContext).codes().take(MAX_FUNDS)
-        if (codes.isEmpty()) {
-            notify(config, "自选为空", "先添加几只基金，再开启每日判断")
+        val repository = IndexRepository(applicationContext)
+        val tracked = runCatching { repository.tracked() }.getOrDefault(emptyList())
+        if (tracked.isEmpty()) {
+            notify(config, "没有可判断的指数", "自选里的基金没有跟踪指数，先去「基金」添加指数基金")
             scheduleNext(config)
             return Result.success()
         }
 
-        val repository = FundRepository(applicationContext)
-        val items = codes.mapNotNull { code ->
-            val series = runCatching { EastMoneyApi.fetchKline(code, 250) }.getOrNull()
+        val items = tracked.take(MAX_INDICES).mapNotNull { item ->
+            val series = runCatching { repository.series(item.entry) }.getOrNull()
                 ?: return@mapNotNull null
-            val name = series.name.ifBlank { repository.cachedName(code) ?: code }
-            BatchItem(code = code, name = name, series = series)
+            BatchItem(code = item.entry.code, name = item.entry.name, series = series)
         }
 
         if (items.isEmpty()) {
-            notify(config, "数据获取失败", "今天没有取到任何行情数据，稍后再试")
+            notify(config, "数据获取失败", "今天没有取到任何指数行情，稍后再试")
             scheduleNext(config)
             return Result.success()
         }
@@ -68,7 +66,7 @@ class DailyCheckWorker(
                             if (verdict.reason.isNotBlank()) " · ${verdict.reason}" else ""
                     }
                     .ifBlank { "AI 没有返回可用的判断结果" }
-                notify(config, "波段判断 · ${stamp()}", body)
+                notify(config, "指数波段判断 · ${stamp()}", body)
             }
             .onFailure { throwable ->
                 notify(
@@ -82,12 +80,12 @@ class DailyCheckWorker(
         return Result.success()
     }
 
-    private suspend fun notify(config: com.hukua.fundradar.data.AiConfig, title: String, body: String) {
+    private suspend fun notify(config: AiConfig, title: String, body: String) {
         if (!config.barkConfigured) return
         runCatching { BarkNotifier.push(config, title, body) }
     }
 
-    private fun scheduleNext(config: com.hukua.fundradar.data.AiConfig) {
+    private fun scheduleNext(config: AiConfig) {
         runCatching { DailyScheduler.apply(applicationContext, config) }
     }
 
@@ -96,6 +94,6 @@ class DailyCheckWorker(
 
     private companion object {
         /** Keeps the single AI call short and the push readable. */
-        const val MAX_FUNDS = 12
+        const val MAX_INDICES = 12
     }
 }

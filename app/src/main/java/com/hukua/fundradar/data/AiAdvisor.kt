@@ -59,7 +59,8 @@ object AiAdvisor {
         config: AiConfig,
         fundName: String,
         code: String,
-        series: KlineSeries
+        series: KlineSeries,
+        subject: String = "基金"
     ): AiVerdict = withContext(Dispatchers.IO) {
         require(config.configured) { "还没有配置 AI 接口" }
         val latest = series.latest ?: throw IllegalStateException("没有可用的行情数据")
@@ -77,7 +78,7 @@ object AiAdvisor {
         }
 
         val dataBlock = buildString {
-            appendLine("基金：${fundName.ifBlank { code }}（$code）")
+            appendLine("$subject：${fundName.ifBlank { code }}（$code）")
             appendLine("数据来源：${if (series.source == KlineSource.EXCHANGE) "场内交易K线" else "场外每日净值"}")
             appendLine("最新日期：${latest.date}")
             appendLine("最新价格/净值：${String.format(Locale.US, "%.4f", latest.close)}")
@@ -178,15 +179,15 @@ object AiAdvisor {
             }
         }
 
-        val system = "你是一名谨慎的基金波段交易助手，只依据给定数据分析，不编造消息面，" +
+        val system = "你是一名谨慎的波段交易助手，只依据给定数据分析，不编造消息面，" +
             "用中文回答，且只输出 JSON 数组。"
 
         val user = buildString {
-            appendLine("下面是我自选基金的最新均线与涨跌数据，请逐只判断当前是否适合波段买入 / 波段卖出 / 观望。")
+            appendLine("下面是我自选基金跟踪的指数的最新均线与涨跌数据，请逐个判断当前是否适合波段买入 / 波段卖出 / 观望。")
             appendLine()
             appendLine(blocks)
             appendLine()
-            appendLine("要求：结合 MA5/MA10/MA20/MA60 的多空排列与价格偏离度；场外基金申赎有延迟，判断偏保守。")
+            appendLine("要求：结合 MA5/MA10/MA20/MA60 的多空排列与价格偏离度；指数不能直接买卖，结论用于指导对应基金的申赎时机，判断偏保守。")
             append("""只输出 JSON 数组，不要代码块：""")
             append("""[{"code":"161725","action":"BUY|SELL|HOLD","confidence":0-100,"reason":"40字以内中文理由"}]""")
         }

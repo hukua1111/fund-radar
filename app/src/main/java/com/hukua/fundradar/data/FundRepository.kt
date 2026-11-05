@@ -35,7 +35,7 @@ class FundRepository(context: Context) {
 
     private val appContext = context.applicationContext
     private val store = WatchlistStore(appContext)
-    private val cacheFile = File(appContext.filesDir, "fund_detail_cache.json")
+    private val cacheFile = File(appContext.filesDir, "fund_detail_cache_v2.json")
     private val details: MutableMap<String, CachedDetail> by lazy { readCache() }
 
     fun codes(): List<String> = store.codes()
@@ -164,7 +164,8 @@ class FundRepository(context: Context) {
                         company = item.optString("company"),
                         manager = item.optString("manager"),
                         established = item.optString("established"),
-                        scale = item.optString("scale")
+                        scale = item.optString("scale"),
+                        trackIndex = item.optString("trackIndex")
                     ),
                     savedAt = item.optLong("savedAt", 0L)
                 )
@@ -197,6 +198,7 @@ class FundRepository(context: Context) {
                         .put("manager", d.manager)
                         .put("established", d.established)
                         .put("scale", d.scale)
+                        .put("trackIndex", d.trackIndex)
                         .put("savedAt", entry.savedAt)
                 )
             }

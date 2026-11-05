@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
@@ -19,8 +20,10 @@ import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.ui.AddFundSheetContent
 import com.hukua.fundradar.ui.AddFundState
+import com.hukua.fundradar.ui.AppBottomBar
 import com.hukua.fundradar.ui.FundRadarContent
 import com.hukua.fundradar.ui.FundUiState
+import com.hukua.fundradar.ui.TAB_FUND
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import org.junit.Rule
 import org.junit.Test
@@ -52,7 +55,7 @@ class ScreenshotTest {
     fun loadingState() {
         compose.setContent {
             FundRadarTheme(darkTheme = false) {
-                FundRadarContent(state = FundUiState(loading = true, watchlistEmpty = false))
+                FundScreen(FundUiState(loading = true, watchlistEmpty = false))
             }
         }
         compose.waitForIdle()
@@ -63,7 +66,7 @@ class ScreenshotTest {
     fun emptyWatchlist() {
         compose.setContent {
             FundRadarTheme(darkTheme = false) {
-                FundRadarContent(state = FundUiState(loading = false, watchlistEmpty = true))
+                FundScreen(FundUiState(loading = false, watchlistEmpty = true))
             }
         }
         compose.waitForIdle()
@@ -135,7 +138,7 @@ class ScreenshotTest {
         )
         compose.setContent {
             FundRadarTheme(darkTheme = false) {
-                FundRadarContent(state = state)
+                FundScreen(state)
             }
         }
         compose.waitForIdle()
@@ -148,11 +151,19 @@ class ScreenshotTest {
     private fun render(dark: Boolean, name: String) {
         compose.setContent {
             FundRadarTheme(darkTheme = dark) {
-                FundRadarContent(state = sampleState())
+                FundScreen(sampleState())
             }
         }
         compose.waitForIdle()
         save(name)
+    }
+
+    @Composable
+    private fun FundScreen(state: FundUiState) {
+        FundRadarContent(
+            state = state,
+            bottomBar = { AppBottomBar(selected = TAB_FUND, onSelect = {}) }
+        )
     }
 
     private fun save(name: String) {
@@ -176,7 +187,7 @@ class ScreenshotTest {
     fun dumpLayoutTree() {
         compose.setContent {
             FundRadarTheme(darkTheme = false) {
-                FundRadarContent(state = sampleState())
+                FundScreen(sampleState())
             }
         }
         compose.waitForIdle()

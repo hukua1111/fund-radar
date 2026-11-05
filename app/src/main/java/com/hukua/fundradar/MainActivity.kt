@@ -5,20 +5,31 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.hukua.fundradar.data.Fund
+import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.SettingsStore
+import com.hukua.fundradar.ui.AppBottomBar
 import com.hukua.fundradar.ui.FundDetailSheet
 import com.hukua.fundradar.ui.FundRadarScreen
 import com.hukua.fundradar.ui.FundViewModel
+import com.hukua.fundradar.ui.IndexScreen
+import com.hukua.fundradar.ui.IndexViewModel
 import com.hukua.fundradar.ui.KlineScreen
 import com.hukua.fundradar.ui.KlineViewModel
 import com.hukua.fundradar.ui.SettingsScreen
+import com.hukua.fundradar.ui.TAB_FUND
+import com.hukua.fundradar.ui.TAB_INDEX
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import com.hukua.fundradar.work.DailyScheduler
 
@@ -34,16 +45,20 @@ class MainActivity : ComponentActivity() {
         setContent {
             FundRadarTheme {
                 val viewModel: FundViewModel = viewModel(factory = FundViewModel.factory(this))
+                val indexViewModel: IndexViewModel = viewModel(factory = IndexViewModel.factory(this))
                 val detail by viewModel.detail.collectAsStateWithLifecycle()
 
                 var route by rememberSaveable { mutableStateOf("list") }
+                var tab by rememberSaveable { mutableStateOf(TAB_FUND) }
                 var settingsReturn by rememberSaveable { mutableStateOf("list") }
+                var klineSecid by rememberSaveable { mutableStateOf("") }
                 var klineCode by rememberSaveable { mutableStateOf("") }
                 var klineName by rememberSaveable { mutableStateOf("") }
 
-                val openKline: (Fund) -> Unit = { fund ->
-                    klineCode = fund.code
-                    klineName = fund.name
+                val openKline: (IndexEntry, String) -> Unit = { entry, trackedName ->
+                    klineSecid = entry.secid
+                    klineCode = entry.code
+                    klineName = entry.name.ifBlank { trackedName }
                     route = "kline"
                 }
 
@@ -56,13 +71,22 @@ class MainActivity : ComponentActivity() {
                     route = if (route == "settings") settingsReturn else "list"
                 }
 
+                // Index quotes are cheap but change intraday; refresh on tab entry.
+                LaunchedEffect(tab, route) {
+                    if (route == "list" && tab == TAB_INDEX) indexViewModel.load()
+                }
+
+                val bottomBar: @Composable () -> Unit = {
+                    AppBottomBar(selected = tab, onSelect = { tab = it })
+                }
+
                 when (route) {
                     "settings" -> SettingsScreen(onBack = { route = settingsReturn })
 
                     "kline" -> {
                         val klineViewModel: KlineViewModel = viewModel(
-                            key = "kline-$klineCode",
-                            factory = KlineViewModel.factory(this, klineCode, klineName)
+                            key = "kline-$klineSecid",
+                            factory = KlineViewModel.factory(this, klineSecid, klineCode, klineName)
                         )
                         KlineScreen(
                             viewModel = klineViewModel,
@@ -71,21 +95,27 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    else -> {
-                        FundRadarScreen(
-                            viewModel = viewModel,
-                            onOpenSettings = openSettings
+                    else -> when (tab) {
+                        TAB_INDEX -> IndexScreen(
+                            viewModel = indexViewModel,
+                            onOpenSettings = openSettings,
+                            onOpenKline = openKline,
+                            bottomBar = bottomBar
                         )
-                        detail?.let { state ->
-                            FundDetailSheet(
-                                state = state,
-                                onDismiss = viewModel::closeDetail,
-                                onRemove = viewModel::removeFund,
-                                onOpenKline = { fund ->
-                                    viewModel.closeDetail()
-                                    openKline(fund)
-                                }
+
+                        else -> {
+                            FundRadarScreen(
+                                viewModel = viewModel,
+                                onOpenSettings = openSettings,
+                                bottomBar = bottomBar
                             )
+                            detail?.let { state ->
+                                FundDetailSheet(
+                                    state = state,
+                                    onDismiss = viewModel::closeDetail,
+                                    onRemove = viewModel::removeFund
+                                )
+                            }
                         }
                     }
                 }

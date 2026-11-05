@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 data class KlineUiState(
     val code: String = "",
     val name: String = "",
+    val secid: String = "",
     val range: Int = 120,
     val loading: Boolean = true,
     val error: String? = null,
@@ -30,16 +31,19 @@ data class KlineUiState(
     val aiConfigured: Boolean = false
 )
 
+/** K line + AI swing judgement for one index. */
 class KlineViewModel(
+    private val secid: String,
     private val code: String,
-    private val fundName: String,
+    private val indexName: String,
     private val settings: SettingsStore
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
         KlineUiState(
             code = code,
-            name = fundName,
+            name = indexName,
+            secid = secid,
             aiConfigured = settings.load().configured
         )
     )
@@ -52,14 +56,14 @@ class KlineViewModel(
     fun load() {
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
-            runCatching { EastMoneyApi.fetchKline(code, HISTORY) }
+            runCatching { EastMoneyApi.fetchIndexKline(secid, HISTORY) }
                 .onSuccess { series ->
                     _state.update {
                         it.copy(
                             loading = false,
                             series = series,
-                            name = series?.name?.takeIf { n -> n.isNotBlank() } ?: it.name,
-                            error = if (series == null) "没有取到行情数据" else null
+                            name = it.name.ifBlank { series?.name.orEmpty() },
+                            error = if (series == null) "没有取到指数行情" else null
                         )
                     }
                 }
@@ -93,7 +97,7 @@ class KlineViewModel(
 
         _state.update { it.copy(judging = true, verdictError = null, aiConfigured = true) }
         viewModelScope.launch {
-            runCatching { AiAdvisor.judge(config, current.name, code, series) }
+            runCatching { AiAdvisor.judge(config, current.name, code, series, subject = "指数") }
                 .onSuccess { verdict ->
                     _state.update { it.copy(judging = false, verdict = verdict) }
                 }
@@ -113,11 +117,15 @@ class KlineViewModel(
         /** Fetched once; the range selector only slices this locally. */
         const val HISTORY = 250
 
-        fun factory(context: Context, code: String, name: String): ViewModelProvider.Factory =
-            viewModelFactory {
-                initializer {
-                    KlineViewModel(code, name, SettingsStore(context.applicationContext))
-                }
+        fun factory(
+            context: Context,
+            secid: String,
+            code: String,
+            name: String
+        ): ViewModelProvider.Factory = viewModelFactory {
+            initializer {
+                KlineViewModel(secid, code, name, SettingsStore(context.applicationContext))
             }
+        }
     }
 }

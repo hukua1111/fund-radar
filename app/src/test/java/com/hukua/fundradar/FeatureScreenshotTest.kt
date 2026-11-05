@@ -11,12 +11,20 @@ import androidx.compose.ui.test.printToString
 import com.hukua.fundradar.data.AiConfig
 import com.hukua.fundradar.data.AiVerdict
 import com.hukua.fundradar.data.Candle
+import com.hukua.fundradar.data.IndexEntry
+import com.hukua.fundradar.data.IndexQuote
 import com.hukua.fundradar.data.KlineSeries
 import com.hukua.fundradar.data.KlineSource
 import com.hukua.fundradar.data.SwingAction
+import com.hukua.fundradar.data.TrackedIndex
+import com.hukua.fundradar.ui.AppBottomBar
+import com.hukua.fundradar.ui.IndexContent
+import com.hukua.fundradar.ui.IndexItem
+import com.hukua.fundradar.ui.IndexUiState
 import com.hukua.fundradar.ui.KlineContent
 import com.hukua.fundradar.ui.KlineUiState
 import com.hukua.fundradar.ui.SettingsContent
+import com.hukua.fundradar.ui.TAB_INDEX
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import org.junit.Rule
 import org.junit.Test
@@ -94,6 +102,61 @@ class FeatureScreenshotTest {
         compose.waitForIdle()
         save("settings")
         dump("tree-settings.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun indexTab() {
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                IndexContent(
+                    state = sampleIndexState(),
+                    bottomBar = { AppBottomBar(selected = TAB_INDEX, onSelect = {}) }
+                )
+            }
+        }
+        compose.waitForIdle()
+        save("index-tab")
+        dump("tree-index.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun indexTabEmpty() {
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                IndexContent(
+                    state = IndexUiState(loading = false, watchlistEmpty = true),
+                    bottomBar = { AppBottomBar(selected = TAB_INDEX, onSelect = {}) }
+                )
+            }
+        }
+        compose.waitForIdle()
+        save("index-empty")
+    }
+
+    private fun sampleIndexState(): IndexUiState {
+        val coal = IndexEntry("399998", 0, "中证煤炭")
+        val liquor = IndexEntry("399997", 0, "中证白酒")
+        val semi = IndexEntry("980017", 0, "国证半导体芯片")
+        return IndexUiState(
+            loading = false,
+            items = listOf(
+                IndexItem(
+                    tracked = TrackedIndex(coal, "中证煤炭指数", listOf("008279", "161724")),
+                    quote = IndexQuote(coal, 2292.63, 2.39, "2026-11-05")
+                ),
+                IndexItem(
+                    tracked = TrackedIndex(liquor, "中证白酒指数", listOf("161725", "012414")),
+                    quote = IndexQuote(liquor, 8941.20, -1.27, "2026-11-05")
+                ),
+                IndexItem(
+                    tracked = TrackedIndex(semi, "国证半导体芯片指数", listOf("008888")),
+                    quote = IndexQuote(semi, 6120.55, 0.0, "2026-11-05")
+                )
+            ),
+            updatedAt = System.currentTimeMillis()
+        )
     }
 
     private fun sampleVerdict() = AiVerdict(

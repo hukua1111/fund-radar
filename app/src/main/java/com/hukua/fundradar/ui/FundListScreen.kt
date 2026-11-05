@@ -85,7 +85,11 @@ private val SUGGESTIONS = listOf(
 )
 
 @Composable
-fun FundRadarScreen(viewModel: FundViewModel, onOpenSettings: () -> Unit = {}) {
+fun FundRadarScreen(
+    viewModel: FundViewModel,
+    onOpenSettings: () -> Unit = {},
+    bottomBar: @Composable () -> Unit = {}
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val addState by viewModel.add.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -107,7 +111,8 @@ fun FundRadarScreen(viewModel: FundViewModel, onOpenSettings: () -> Unit = {}) {
         onAddClick = viewModel::openAdd,
         onSuggestion = viewModel::addFund,
         onDismissChanges = viewModel::dismissChanges,
-        onOpenSettings = onOpenSettings
+        onOpenSettings = onOpenSettings,
+        bottomBar = bottomBar
     )
 
     if (addState.open) {
@@ -135,11 +140,13 @@ fun FundRadarContent(
     onAddClick: () -> Unit = {},
     onSuggestion: (String) -> Unit = {},
     onDismissChanges: () -> Unit = {},
-    onOpenSettings: () -> Unit = {}
+    onOpenSettings: () -> Unit = {},
+    bottomBar: @Composable () -> Unit = {}
 ) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
+        bottomBar = bottomBar,
         topBar = {
             TopAppBar(
                 title = {

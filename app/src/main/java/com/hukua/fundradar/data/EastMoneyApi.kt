@@ -31,6 +31,9 @@ object EastMoneyApi {
     private const val LIST_URL = "https://fund.eastmoney.com/Data/Fund_JJJZ_Data.aspx"
     private const val FUND_PAGE = "https://fund.eastmoney.com/%s.html"
 
+    /** 深市/中证系列指数 + 沪市指数，两个 filter 合起来约 1k 条。 */
+    private val CATALOG_FILTERS = listOf("m:0+t:5", "m:1+s:5")
+
     /** Fund list, sorted by today's change, with purchase status included. */
     suspend fun fetchList(pageSize: Int, keyword: String = ""): List<Fund> {
         val url = buildString {
@@ -145,6 +148,9 @@ object EastMoneyApi {
             .find(html)?.groupValues?.get(1).orEmpty()
         val scale = Regex("""规模</a>：([\d.]+)(亿元|万元)""")
             .find(html)?.let { "${it.groupValues[1]}${it.groupValues[2]}" }.orEmpty()
+        // <a ...>跟踪标的：</a>中证煤炭等权指数 | <a ...>年化跟踪误差：</a>
+        val trackIndex = Regex("""跟踪标的：</a>([^<|]+)""")
+            .find(html)?.groupValues?.get(1)?.trim().orEmpty()
 
         return FundDetail(
             name = name,
@@ -162,7 +168,8 @@ object EastMoneyApi {
             company = company,
             manager = manager,
             established = established,
-            scale = scale
+            scale = scale,
+            trackIndex = trackIndex
         )
     }
 
@@ -224,6 +231,78 @@ object EastMoneyApi {
             source = KlineSource.EXCHANGE,
             candles = candles
         )
+    }
+
+    /** Daily candles for an index, addressed by its eastmoney secid (`0.399998`). */
+    suspend fun fetchIndexKline(secid: String, limit: Int = 250): KlineSeries? = runCatching {
+        val url = "https://push2his.eastmoney.com/api/qt/stock/kline/get" +
+            "?secid=$secid" +
+            "&fields1=f1,f2,f3,f4,f5,f6" +
+            "&fields2=f51,f52,f53,f54,f55,f56,f57,f58" +
+            "&klt=101&fqt=1&end=20500101&lmt=$limit&_=${System.currentTimeMillis()}"
+        val body = httpGet(url, referer = "https://quote.eastmoney.com/")
+        val data = JSONObject(body).optJSONObject("data") ?: return@runCatching null
+        val rows = data.optJSONArray("klines") ?: return@runCatching null
+        if (rows.length() == 0) return@runCatching null
+
+        val candles = ArrayList<Candle>(rows.length())
+        for (i in 0 until rows.length()) {
+            val parts = rows.optString(i).split(',')
+            if (parts.size < 5) continue
+            val open = parts[1].toDoubleOrNull() ?: continue
+            val close = parts[2].toDoubleOrNull() ?: continue
+            candles += Candle(
+                date = parts[0],
+                open = open,
+                close = close,
+                high = parts[3].toDoubleOrNull() ?: open,
+                low = parts[4].toDoubleOrNull() ?: open,
+                volume = parts.getOrNull(5)?.toDoubleOrNull() ?: 0.0
+            )
+        }
+        if (candles.isEmpty()) return@runCatching null
+        KlineSeries(
+            code = data.optString("code"),
+            name = data.optString("name"),
+            source = KlineSource.EXCHANGE,
+            candles = candles
+        )
+    }.getOrNull()
+
+    /**
+     * Every quotable index (~1k rows). The search endpoint used by the website
+     * rejects non-browser TLS fingerprints, so we download the full list once a
+     * week and match names locally instead.
+     */
+    suspend fun fetchIndexCatalog(): List<IndexEntry> {
+        val result = LinkedHashMap<String, IndexEntry>()
+        for (fs in CATALOG_FILTERS) {
+            var page = 1
+            while (page <= 12) {
+                val url = "https://push2.eastmoney.com/api/qt/clist/get" +
+                    "?pn=$page&pz=100&po=1&np=1&fltt=2&invt=2&fid=f12" +
+                    "&fs=$fs&fields=f12,f13,f14&_=${System.currentTimeMillis()}"
+                val body = runCatching {
+                    httpGet(url, referer = "https://quote.eastmoney.com/")
+                }.getOrNull() ?: break
+                val diff = runCatching {
+                    JSONObject(body).optJSONObject("data")?.optJSONArray("diff")
+                }.getOrNull() ?: break
+                if (diff.length() == 0) break
+
+                for (i in 0 until diff.length()) {
+                    val item = diff.optJSONObject(i) ?: continue
+                    val code = item.optString("f12")
+                    val name = item.optString("f14")
+                    val market = item.optInt("f13", -1)
+                    if (code.isBlank() || name.isBlank() || market < 0) continue
+                    result["$market.$code"] = IndexEntry(code, market, name)
+                }
+                if (diff.length() < 100) break
+                page++
+            }
+        }
+        return result.values.toList()
     }
 
     private suspend fun fetchNavKline(code: String, limit: Int): KlineSeries? {
