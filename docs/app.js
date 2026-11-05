@@ -336,8 +336,9 @@ function aiCard() {
     </div>
     ${ai.risk ? `<div class="ai-body" style="color:var(--text-3);font-size:11.5px;margin-top:10px">风险：${esc(ai.risk)}</div>` : ''}
     ${ai.error ? `<div class="ai-error">${esc(ai.error)}</div>` : ''}
-    <button class="btn btn-ghost btn-block" data-action="ai">${ai.source === 'ai' ? '重新判断' : '用 AI 再判断一次'}</button>
+    <button class="btn ${cfgOk ? 'btn-ghost' : 'btn-primary'} btn-block" data-action="ai">${!cfgOk ? '配置 AI 后判断' : ai.source === 'ai' ? '重新判断' : '用 AI 再判断一次'}</button>
     <div class="ai-foot"><span>${ai.source === 'ai' ? 'AI 生成 · ' + esc(ai.model || '') : '规则判断 · 未调用 AI'}${ai.fromCloud ? ' · 每日 14:35' : ''}</span><span>${ai.at ? fmtTime(ai.at) : ''}</span></div>
+    ${!cfgOk ? '<div class="ai-body" style="font-size:11.5px;color:var(--text-3);margin-top:8px">配好接口地址与 Key 后，这里可以随时让 AI 用最新数据复核一次。</div>' : ''}
   </section>`;
 }
 
