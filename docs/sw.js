@@ -1,7 +1,7 @@
 // Service Worker：离线可用 + 版本升级
 // 应用外壳走缓存优先，数据快照走网络优先（失败回退缓存）。
 
-const VERSION = '2.0.1';
+const VERSION = '2.0.2';
 const CACHE = `fund-radar-${VERSION}`;
 const ASSETS = [
   './',
@@ -21,19 +21,16 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  // 先接管，再预热缓存：预热最多等 2.5 秒，避免网络慢时安装卡住
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE).then((cache) =>
-      Promise.all(
-        ASSETS.map((url) =>
-          cache.add(new Request(url, { cache: 'reload' })).catch(() => {
-            /* 单个资源失败不影响整体安装 */
-          })
-        )
-      )
+      Promise.race([
+        Promise.allSettled(ASSETS.map((url) => cache.add(new Request(url, { cache: 'reload' })))),
+        new Promise((resolve) => setTimeout(resolve, 2500)),
+      ])
     )
   );
-  // 首次安装立即接管；更新时也会激活，页面收到 controllerchange 后自动刷新
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
