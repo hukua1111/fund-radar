@@ -153,7 +153,7 @@ Key 只存在这台设备的 `localStorage`，请求直接发往你填的接口�
 │   ├── check.yml             11:00 限额检查
 │   └── daily-ai.yml          14:35 波段判断
 ├── tools/                    图标生成、本地预览
-└── test.mjs                  67 项断言，不联网
+└── test.mjs                  71 项断言，不联网
 ```
 
 ---
@@ -161,7 +161,7 @@ Key 只存在这台设备的 `localStorage`，请求直接发往你填的接口�
 ## 六、本地开发
 
 ```bash
-npm test          # 67 项断言，全部离线
+npm test          # 71 项断言，全部离线
 npm run serve     # http://127.0.0.1:8788 预览前端
 npm run ai        # 手动跑一次判断（需先 export FUNDS=...）
 npm run icons     # 重新生成图标

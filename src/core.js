@@ -44,63 +44,129 @@ export function describe(rec) {
   return `${sgzt} · ${thousands(n)} 元`;
 }
 
-export async function fetchFund(code, fetchImpl = fetch) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function errText(e) {
+  const code = e && e.cause && (e.cause.code || e.cause.message);
+  return `${(e && e.message) || e}${code ? ` (${code})` : ''}`.slice(0, 140);
+}
+
+/**
+ * 基础的申购状态与限额。
+ * GitHub 的 runner 到东方财富偶发连接失败，所以失败重试两次。
+ */
+export async function fetchFund(code, fetchImpl = fetch, retries = 2) {
   const url = `${API}?FCODE=${code}&deviceid=Wap&plat=Wap&product=EFund&version=2.0.0`;
+  let last = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetchImpl(url, {
+        headers: { 'User-Agent': UA, Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        last = { code, ok: false, error: `HTTP ${res.status}` };
+      } else {
+        const data = await res.json();
+        const d = data && data.Datas;
+        if (!d) {
+          last = { code, ok: false, error: (data && data.ErrMsg) || '无数据' };
+        } else {
+          return {
+            code,
+            ok: true,
+            name: d.SHORTNAME || code,
+            type: d.FTYPE || '',
+            sgzt: d.SGZT || '',
+            maxsg: d.MAXSG,
+            minsg: d.MINSG,
+            nav: d.DWJZ,
+            navDate: d.PDATE || '',
+          };
+        }
+      }
+    } catch (e) {
+      last = { code, ok: false, error: errText(e) };
+    }
+    if (attempt < retries) await sleep(400 * (attempt + 1));
+  }
+  return last;
+}
+
+function parseHistoryList(list) {
+  return list
+    .map((d) => ({
+      d: String(d.FSRQ || '').slice(0, 10),
+      c: Number(d.DWJZ),
+      chg: d.JZZZL === '--' || d.JZZZL == null ? null : Number(d.JZZZL),
+      acc: Number(d.LJJZ) || null,
+    }))
+    .filter((k) => k.d && Number.isFinite(k.c) && k.c > 0)
+    .sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+}
+
+/** 备用数据源：天天基金的净值脚本，单文件含全部历史，解析比接口慢但更稳 */
+export async function fetchHistoryFromJS(code, fetchImpl = fetch) {
+  const url = `https://fund.eastmoney.com/pingzhongdata/${code}.js?v=${Date.now()}`;
   try {
-    const res = await fetchImpl(url, {
-      headers: { 'User-Agent': UA, Accept: 'application/json' },
-    });
-    if (!res.ok) return { code, ok: false, error: `HTTP ${res.status}` };
-    const data = await res.json();
-    const d = data && data.Datas;
-    if (!d) return { code, ok: false, error: (data && data.ErrMsg) || '无数据' };
-    return {
-      code,
-      ok: true,
-      name: d.SHORTNAME || code,
-      type: d.FTYPE || '',
-      sgzt: d.SGZT || '',
-      maxsg: d.MAXSG,
-      minsg: d.MINSG,
-      nav: d.DWJZ,
-      navDate: d.PDATE || '',
-    };
+    const res = await fetchImpl(url, { headers: { 'User-Agent': UA } });
+    if (!res.ok || typeof res.text !== 'function') {
+      return { code, ok: false, error: `备用源 HTTP ${res.status || '?'}` };
+    }
+    const text = await res.text();
+    const name = (text.match(/fS_name\s*=\s*"([^"]*)"/) || [])[1] || '';
+    const m = text.match(/Data_netWorthTrend\s*=\s*(\[[\s\S]*?\]);/);
+    if (!m) return { code, ok: false, error: '备用源无净值数组' };
+    const arr = JSON.parse(m[1]);
+    const klines = parseHistoryList(
+      arr.map((p) => ({
+        FSRQ: new Date(p.x + 8 * 3600 * 1000).toISOString().slice(0, 10),
+        DWJZ: p.y,
+        JZZZL: p.equityReturn,
+      }))
+    );
+    if (!klines.length) return { code, ok: false, error: '备用源解析为空' };
+    return { code, ok: true, klines, name, source: 'js' };
   } catch (e) {
-    return { code, ok: false, error: String((e && e.message) || e).slice(0, 120) };
+    return { code, ok: false, error: errText(e) };
   }
 }
 
 /**
  * 拉取一只基金的历史净值（升序）。
  * 接口按日期倒序返回，这里统一反转，方便后面算均线。
+ * 失败会重试，仍失败则切到天天基金的净值脚本。
  */
 export async function fetchHistory(code, opts = {}) {
-  const { pageSize = 500, fetchImpl = fetch } = opts;
+  const { pageSize = 500, fetchImpl = fetch, retries = 2 } = opts;
   const url = `${HISTORY_API}?FCODE=${code}&pageIndex=1&pageSize=${pageSize}&deviceid=Wap&plat=Wap&product=EFund&version=2.0.0`;
-  try {
-    const res = await fetchImpl(url, {
-      headers: { 'User-Agent': UA, Accept: 'application/json' },
-    });
-    if (!res.ok) return { code, ok: false, error: `HTTP ${res.status}` };
-    const data = await res.json();
-    const list = data && data.Datas;
-    if (!Array.isArray(list) || !list.length) {
-      return { code, ok: false, error: (data && data.ErrMsg) || '无历史净值' };
+  let last = { code, ok: false, error: '未知错误' };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetchImpl(url, {
+        headers: { 'User-Agent': UA, Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        last = { code, ok: false, error: `HTTP ${res.status}` };
+      } else {
+        const data = await res.json();
+        const list = data && data.Datas;
+        if (!Array.isArray(list) || !list.length) {
+          last = { code, ok: false, error: (data && data.ErrMsg) || '无历史净值' };
+        } else {
+          const klines = parseHistoryList(list);
+          if (klines.length) return { code, ok: true, klines, source: 'api' };
+          last = { code, ok: false, error: '历史净值解析为空' };
+        }
+      }
+    } catch (e) {
+      last = { code, ok: false, error: errText(e) };
     }
-    const klines = list
-      .map((d) => ({
-        d: String(d.FSRQ || '').slice(0, 10),
-        c: Number(d.DWJZ),
-        chg: d.JZZZL === '--' || d.JZZZL == null ? null : Number(d.JZZZL),
-        acc: Number(d.LJJZ) || null,
-      }))
-      .filter((k) => k.d && Number.isFinite(k.c) && k.c > 0)
-      .sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
-    if (!klines.length) return { code, ok: false, error: '历史净值解析为空' };
-    return { code, ok: true, klines };
-  } catch (e) {
-    return { code, ok: false, error: String((e && e.message) || e).slice(0, 120) };
+    if (attempt < retries) await sleep(500 * (attempt + 1));
   }
+
+  const fallback = await fetchHistoryFromJS(code, fetchImpl);
+  return fallback.ok ? fallback : { ...last, fallbackError: fallback.error };
 }
 
 export function diffSnapshots(prev, items) {

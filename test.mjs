@@ -215,5 +215,25 @@ console.log('\n[19] 无数据时抓取失败');
 const badHist = await fetchHistory('999999', { fetchImpl: async () => ({ ok: true, json: async () => ({ Datas: null, ErrMsg: '无数据' }) }) });
 check('标记为失败', badHist.ok === false && badHist.error === '无数据', badHist);
 
+console.log('\n[20] 主接口失败时切备用源');
+const fakeAll = async (url) => {
+  const u = String(url);
+  if (u.includes('fundmobapi')) throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNRESET' } });
+  if (u.includes('pingzhongdata')) {
+    return {
+      ok: true,
+      status: 200,
+      text: async () =>
+        'var fS_name = "测试基金";var Data_netWorthTrend = [{"x":1793721600000,"y":1.5,"equityReturn":1.2},{"x":1793808000000,"y":1.52,"equityReturn":1.33}];',
+    };
+  }
+  throw new Error('unexpected url ' + u);
+};
+const fb = await fetchHistory('005827', { fetchImpl: fakeAll, retries: 0 });
+check('切到备用源成功', fb.ok === true && fb.source === 'js', fb);
+check('解析出基金名称', fb.name === '测试基金', fb.name);
+check('备用源日期换算正确', fb.klines[0].d === '2026-11-04', fb.klines[0]);
+check('备用源净值与涨跌正确', fb.klines[1].c === 1.52 && fb.klines[1].chg === 1.33, fb.klines[1]);
+
 console.log(`\n结果：${pass} 通过，${fail} 失败\n`);
 process.exit(fail ? 1 : 0);

@@ -73,17 +73,18 @@ const prevState = readJson(join(ROOT, 'state.json'), {});
 console.log(`开始: ${codes.length} 只基金 · AI ${isConfigured(aiConfig) ? '已启用' : '未配置（仅规则判断）'}`);
 
 const started = Date.now();
-const records = await mapLimit(codes, 4, async (code) => {
+const records = await mapLimit(codes, 3, async (code) => {
   const [basic, hist] = await Promise.all([fetchFund(code), fetchHistory(code)]);
   if (!hist.ok) {
-    console.error(`  ${code} 历史净值失败: ${hist.error}`);
+    console.error(`  ${code} 历史净值失败: ${hist.error}${hist.fallbackError ? ' / 备用源: ' + hist.fallbackError : ''}`);
     return { code, ok: false, error: hist.error };
   }
   const { series, latest } = computeIndicators(hist.klines);
-  const name = (basic.ok && basic.name) || (prevState[code] && prevState[code].name) || code;
+  const prev = prevState[code] || {};
+  const name = (basic.ok && basic.name) || hist.name || prev.name || code;
   const type = (basic.ok && basic.type) || '';
-  const sgzt = (basic.ok && basic.sgzt) || (prevState[code] && prevState[code].sgzt) || '';
-  const maxsg = (basic.ok && basic.maxsg) ?? (prevState[code] && prevState[code].maxsg);
+  const sgzt = (basic.ok && basic.sgzt) || prev.sgzt || '';
+  const maxsg = basic.ok ? basic.maxsg : prev.maxsg;
   const limitText = describe({ sgzt, maxsg });
 
   return {
@@ -107,6 +108,9 @@ const okFunds = records.filter((r) => r && r.ok);
 if (!okFunds.length) {
   console.error('全部基金都没取到历史净值，检查网络或接口是否变更');
   process.exit(1);
+}
+if (okFunds.length < codes.length) {
+  console.warn(`注意: ${codes.length - okFunds.length} 只基金本次抓取失败，将沿用上一次的快照`);
 }
 
 // ---- AI 复核 ----
@@ -138,9 +142,20 @@ for (const f of okFunds) {
 
 // ---- 写快照 ----
 const generatedAt = Date.now();
-const fundsOut = okFunds.map((f) => {
-  const v = verdicts.get(f.code);
-  return {
+const prevDoc = readJson(join(DATA_DIR, 'funds.json'), null);
+const prevFunds = new Map(((prevDoc && prevDoc.funds) || []).map((f) => [f.code, f]));
+
+const fundsOut = [];
+for (const code of codes) {
+  const rec = okFunds.find((f) => f.code === code);
+  if (!rec) {
+    const old = prevFunds.get(code);
+    if (old) fundsOut.push({ ...old, stale: true });
+    continue;
+  }
+  const v = verdicts.get(rec.code);
+  const f = rec;
+  fundsOut.push({
     code: f.code,
     name: f.name,
     type: f.type,
@@ -181,8 +196,8 @@ const fundsOut = okFunds.map((f) => {
       model: v.model || null,
       error: v.error || null,
     },
-  };
-});
+  });
+}
 
 const failed = records.filter((r) => !r || !r.ok).map((r) => r && r.code).filter(Boolean);
 
@@ -190,7 +205,7 @@ const fundsDoc = {
   version: 2,
   updatedAt: generatedAt,
   updatedAtText: bjNow(generatedAt),
-  dataDate: fundsOut[0] ? fundsOut[0].navDate : null,
+  dataDate: fundsOut.reduce((acc, f) => (f.navDate && f.navDate > (acc || '') ? f.navDate : acc), null),
   aiEnabled: isConfigured(aiConfig) && aiTargets.length > 0,
   funds: fundsOut,
   failed,
@@ -213,9 +228,29 @@ for (const f of okFunds) {
   });
 }
 
+// 抓取失败的基金会沿用旧快照，这里把它的旧结论也还原出来
+function verdictOf(f) {
+  const v = verdicts.get(f.code);
+  if (v) return v;
+  return {
+    action: f.ind.action,
+    confidence: f.ind.confidence,
+    score: f.ind.score,
+    summary: f.ind.summary,
+    reasons: f.ind.reasons,
+    position: f.ind.position,
+    support: f.ind.support,
+    resistance: f.ind.resistance,
+    risk: f.ind.risk,
+    source: f.ind.source || 'rule',
+    model: f.ind.model,
+    error: f.ind.error,
+  };
+}
+
 const items = fundsOut
   .map((f) => {
-    const v = verdicts.get(f.code);
+    const v = verdictOf(f);
     return {
       code: f.code,
       name: f.name,
@@ -315,7 +350,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
   if (failed.length) lines.push(`- 失败：${failed.join('、')}`);
   lines.push('', '| 代码 | 名称 | 结论 | 信心 | 分数 | 净值 | MA20 | 说明 |', '| --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const f of fundsOut) {
-    const v = verdicts.get(f.code);
+    const v = verdictOf(f);
     lines.push(
       `| ${f.code} | ${f.name} | ${actionShort(v.action)} | ${v.confidence}% | ${v.score ?? '-'} | ${f.nav} | ${f.ind.ma20 ?? '-'} | ${v.summary} |`
     );
