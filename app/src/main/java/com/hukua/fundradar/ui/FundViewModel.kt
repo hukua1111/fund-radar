@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 enum class FundFilter(val label: String) {
     ALL("全部"),
@@ -229,6 +230,9 @@ class FundViewModel(
     /**
      * Re-reads the intraday estimate for every fund already on screen. Cheap
      * (one batched quote request) so it can run every time the tab is opened.
+     *
+     * 先用手上已有的「基金 → 指数」映射算一轮，卡片立刻有数字；映射需要读
+     * 目录、偶尔还要联网，放到后面补，最多等几秒，拿不到就十分钟后再试。
      */
     fun refreshEstimates() {
         if (!scope.isPortfolio) return
@@ -237,32 +241,46 @@ class FundViewModel(
         estimateJob?.cancel()
         _state.update { it.copy(estimatesLoading = true) }
         estimateJob = viewModelScope.launch {
-            val proxies = withContext(Dispatchers.IO) { proxies() }
-            val batch = runCatching { estimateRepository.estimates(funds, proxies) }
-                .getOrElse { EstimateBatch(error = it.message ?: "估算失败") }
-            _state.update {
-                it.copy(
-                    estimates = batch.estimates,
-                    estimatesError = batch.error,
-                    estimatesLoading = false,
-                    estimatesAt = batch.at.takeIf { at -> at > 0 } ?: System.currentTimeMillis()
-                )
+            val known = proxyCache?.second.orEmpty()
+            publish(estimateRepository.safe(funds, known))
+
+            if (!needsProxyRefresh()) return@launch
+            val fresh = withTimeoutOrNull(PROXY_TIMEOUT_MS) {
+                withContext(Dispatchers.IO) { indexRepository.fundProxies() }
             }
+            proxyCache = System.currentTimeMillis() to (fresh ?: known)
+            if (fresh == null || sameProxies(known, fresh)) return@launch
+            publish(estimateRepository.safe(funds, fresh))
         }
     }
 
-    /**
-     * 基金 → 标的指数。解析要读目录、偶尔还要联网，十分钟内复用一份，
-     * 免得每分钟的估值刷新都去重算一遍。
-     */
-    private suspend fun proxies(): Map<String, IndexEntry> {
-        val cached = proxyCache
-        val now = System.currentTimeMillis()
-        if (cached != null && now - cached.first < PROXY_TTL_MS) return cached.second
-        val fresh = indexRepository.fundProxies()
-        proxyCache = now to fresh
-        return fresh
+    private suspend fun publish(batch: EstimateBatch) {
+        _state.update {
+            it.copy(
+                estimates = batch.estimates,
+                estimatesError = batch.error,
+                estimatesLoading = false,
+                estimatesAt = batch.at.takeIf { at -> at > 0 } ?: System.currentTimeMillis()
+            )
+        }
     }
+
+    private fun needsProxyRefresh(): Boolean {
+        val cached = proxyCache ?: return true
+        return System.currentTimeMillis() - cached.first >= PROXY_TTL_MS
+    }
+
+    private fun sameProxies(
+        old: Map<String, IndexEntry>,
+        new: Map<String, IndexEntry>
+    ): Boolean =
+        old.size == new.size && old.all { (code, entry) -> new[code]?.secid == entry.secid }
+
+    private suspend fun EstimateRepository.safe(
+        funds: List<Fund>,
+        proxies: Map<String, IndexEntry>
+    ): EstimateBatch = runCatching { estimates(funds, proxies) }
+        .getOrElse { EstimateBatch(error = it.message ?: "估算失败") }
 
     // ---------------------------------------------------------- detail
 
@@ -385,6 +403,9 @@ class FundViewModel(
     companion object {
         /** 基金 → 指数的映射缓存十分钟，够覆盖几次估值刷新。 */
         private const val PROXY_TTL_MS = 10 * 60 * 1000L
+
+        /** 解析映射最多等这么久，超时就先用已有的跑。 */
+        private const val PROXY_TIMEOUT_MS = 8_000L
 
         fun factory(context: Context, scope: FundScope): ViewModelProvider.Factory =
             viewModelFactory {
