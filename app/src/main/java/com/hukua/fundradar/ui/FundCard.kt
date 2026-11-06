@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.hukua.fundradar.data.Estimate
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.LimitType
 import com.hukua.fundradar.data.growthText
@@ -39,24 +40,30 @@ import com.hukua.fundradar.data.navText
 import com.hukua.fundradar.ui.theme.LocalMarketColors
 
 /**
- * One fund, one overview card. Only what you scan for lives here — name, code,
- * NAV and today's move; every other number is one tap away on [FundDetailScreen].
+ * One fund, one card. Two shapes:
  *
+ * Portfolio (no purchase-limit judging, the intraday estimate is the point):
  * ```
  * ┌──────────────────────────────────────────────┐
- * │ 招商中证白酒指数(LOF)A              [限大额 50万] │
- * │ 161725 · 指数型-股票                            │
+ * │ 国泰中证煤炭ETF联接C                            │
+ * │ 008280 · 指数型-股票                            │
  * │ ──────────────────────────────────────────── │
- * │ 0.5676              +5.58%                ›   │
- * │ 单位净值             日涨跌                    │
+ * │ 2.1532              -3.36%                ›   │
+ * │ 单位净值             估算涨跌                    │
+ * │ 按目标 ETF 估算 · 煤炭ETF国泰 515220 · 11-05 16:14 │
  * └──────────────────────────────────────────────┘
  * ```
+ *
+ * Limit watchlist adds the badge and swaps the estimate for the reported
+ * daily change.
  */
 @Composable
 fun FundCard(
     fund: Fund,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    estimate: Estimate? = null,
+    showLimitBadge: Boolean = true
 ) {
     Surface(
         onClick = onClick,
@@ -84,8 +91,10 @@ fun FundCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Spacer(Modifier.width(10.dp))
-                LimitBadge(fund = fund)
+                if (showLimitBadge) {
+                    Spacer(Modifier.width(10.dp))
+                    LimitBadge(fund = fund)
+                }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -98,16 +107,37 @@ fun FundCard(
                     value = navText(fund.nav),
                     modifier = Modifier.weight(1f)
                 )
-                ValueCell(
-                    label = "日涨跌",
-                    value = growthText(fund.dayGrowth),
-                    valueColor = growthColor(fund.dayGrowth),
-                    modifier = Modifier.weight(1f)
-                )
+                if (showLimitBadge) {
+                    ValueCell(
+                        label = "日涨跌",
+                        value = growthText(fund.dayGrowth),
+                        valueColor = growthColor(fund.dayGrowth),
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    ValueCell(
+                        label = "估算涨跌",
+                        value = estimate?.let { growthText(it.percent) } ?: "—",
+                        valueColor = estimate?.let { growthColor(it.percent) }
+                            ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
                 // material-icons-core has no chevron; drawing two strokes keeps
                 // the APK from pulling in the whole extended icon set.
                 Chevron(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                )
+            }
+
+            if (!showLimitBadge) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = estimate?.footnote ?: "暂无实时行情，显示最近一次公布净值",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

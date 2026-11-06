@@ -16,7 +16,10 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
 import com.hukua.fundradar.data.ChangeKind
+import com.hukua.fundradar.data.Estimate
+import com.hukua.fundradar.data.EstimateSource
 import com.hukua.fundradar.data.Fund
+import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.ui.AddFundSheetContent
 import com.hukua.fundradar.ui.AddFundState
@@ -24,6 +27,7 @@ import com.hukua.fundradar.ui.AppBottomBar
 import com.hukua.fundradar.ui.FundRadarContent
 import com.hukua.fundradar.ui.FundUiState
 import com.hukua.fundradar.ui.TAB_FUND
+import com.hukua.fundradar.ui.TAB_LIMIT
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import org.junit.Rule
 import org.junit.Test
@@ -50,6 +54,9 @@ class ScreenshotTest {
 
     @Test
     fun mainScreenDark() = render(dark = true, name = "main-dark")
+
+    @Test
+    fun limitTabLight() = render(dark = false, name = "limit-light", scope = FundScope.LIMIT)
 
     @Test
     fun loadingState() {
@@ -118,7 +125,7 @@ class ScreenshotTest {
 
     @Test
     fun changesSection() {
-        val state = sampleState().copy(
+        val state = sampleState(FundScope.LIMIT).copy(
             changes = listOf(
                 LimitChange(
                     code = "161725",
@@ -148,10 +155,10 @@ class ScreenshotTest {
             .writeText(compose.onRoot(useUnmergedTree = true).printToString(maxDepth = 30))
     }
 
-    private fun render(dark: Boolean, name: String) {
+    private fun render(dark: Boolean, name: String, scope: FundScope = FundScope.PORTFOLIO) {
         compose.setContent {
             FundRadarTheme(darkTheme = dark) {
-                FundScreen(sampleState())
+                FundScreen(sampleState(scope))
             }
         }
         compose.waitForIdle()
@@ -195,7 +202,7 @@ class ScreenshotTest {
         File(dir, "tree.txt").writeText(compose.onRoot(useUnmergedTree = true).printToString(maxDepth = 30))
     }
 
-    private fun sampleState(): FundUiState {
+    private fun sampleState(scope: FundScope = FundScope.PORTFOLIO): FundUiState {
         val funds = listOf(
             Fund(
                 code = "161725", name = "招商中证白酒指数(LOF)A", type = "指数型-股票",
@@ -231,9 +238,37 @@ class ScreenshotTest {
         return FundUiState(
             all = funds,
             visible = funds,
+            scope = scope,
             loading = false,
             watchlistEmpty = false,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = System.currentTimeMillis(),
+            estimates = if (scope.isPortfolio) estimates() else emptyMap(),
+            estimatesAt = System.currentTimeMillis()
         )
     }
+
+    private fun estimates(): Map<String, Estimate> = mapOf(
+        "161725" to Estimate(
+            percent = 5.58,
+            nav = 0.5992,
+            source = EstimateSource.ETF,
+            basis = "酒ETF 512690",
+            quoteTime = "11-05 15:00"
+        ),
+        "012414" to Estimate(
+            percent = 5.61,
+            nav = 0.5964,
+            source = EstimateSource.ETF,
+            basis = "酒ETF 512690",
+            quoteTime = "11-05 15:00"
+        ),
+        "110022" to Estimate(
+            percent = 2.31,
+            nav = 2.9373,
+            source = EstimateSource.HOLDINGS,
+            basis = "10 只重仓股",
+            quoteTime = "11-05 15:00",
+            coverage = 62.4
+        )
+    )
 }

@@ -10,8 +10,8 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 /**
- * Two stroke-only icons for the bottom bar. Hand written so the app does not
- * have to pull in material-icons-extended (3 MB for a handful of glyphs).
+ * Stroke-only icons for the bottom bar. Hand written so the app does not have
+ * to pull in material-icons-extended (3 MB for a handful of glyphs).
  */
 private fun tabIcon(name: String, block: PathBuilder.() -> Unit): ImageVector =
     ImageVector.Builder(
@@ -31,8 +31,8 @@ private fun tabIcon(name: String, block: PathBuilder.() -> Unit): ImageVector =
         )
     }.build()
 
-/** A card: the fund list. */
-val FundTabIcon: ImageVector = tabIcon("FundTab") {
+/** A stack of cards: the portfolio tab. */
+val PortfolioTabIcon: ImageVector = tabIcon("PortfolioTab") {
     moveTo(3.5f, 6.5f)
     lineTo(20.5f, 6.5f)
     lineTo(20.5f, 17.5f)
@@ -40,6 +40,21 @@ val FundTabIcon: ImageVector = tabIcon("FundTab") {
     close()
     moveTo(3.5f, 10.5f)
     lineTo(20.5f, 10.5f)
+    moveTo(7f, 14f)
+    lineTo(12f, 14f)
+}
+
+/** A padlock: the purchase-limit tab. */
+val LimitTabIcon: ImageVector = tabIcon("LimitTab") {
+    moveTo(5.5f, 10.5f)
+    lineTo(18.5f, 10.5f)
+    lineTo(18.5f, 20f)
+    lineTo(5.5f, 20f)
+    close()
+    moveTo(8.5f, 10.5f)
+    lineTo(8.5f, 7.5f)
+    curveTo(8.5f, 3.9f, 15.5f, 3.9f, 15.5f, 7.5f)
+    lineTo(15.5f, 10.5f)
 }
 
 /** A trend line: the index tab. */

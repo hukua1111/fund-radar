@@ -31,10 +31,13 @@ data class LoadResult(
  * result cached for [TTL_MS], and after [MAX_FAILURES] consecutive failures the
  * remaining funds fall back to whatever is cached instead of hammering on.
  */
-class FundRepository(context: Context) {
+class FundRepository(
+    context: Context,
+    val scope: FundScope = FundScope.PORTFOLIO
+) {
 
     private val appContext = context.applicationContext
-    private val store = WatchlistStore(appContext)
+    private val store = WatchlistStore(appContext, scope)
     private val cacheFile = File(appContext.filesDir, "fund_detail_cache_v2.json")
     private val details: MutableMap<String, CachedDetail> by lazy { readCache() }
 
@@ -61,6 +64,18 @@ class FundRepository(context: Context) {
 
     fun remove(code: String) {
         store.remove(code)
+    }
+
+    /**
+     * Copies the portfolio into the limit watchlist in one go — the limit list
+     * is usually a subset of what the user holds, so retyping codes would be
+     * pointless busywork.
+     */
+    suspend fun importPortfolio(): Int = withContext(Dispatchers.IO) {
+        val portfolio = WatchlistStore(appContext, FundScope.PORTFOLIO).codes()
+        val before = store.codes().toSet()
+        store.addAll(portfolio)
+        store.codes().count { it !in before }
     }
 
     suspend fun load(

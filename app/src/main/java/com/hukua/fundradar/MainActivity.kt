@@ -13,6 +13,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.SettingsStore
 import com.hukua.fundradar.ui.AppBottomBar
@@ -24,8 +25,9 @@ import com.hukua.fundradar.ui.IndexViewModel
 import com.hukua.fundradar.ui.KlineScreen
 import com.hukua.fundradar.ui.KlineViewModel
 import com.hukua.fundradar.ui.SettingsScreen
-import com.hukua.fundradar.ui.TAB_FUND
 import com.hukua.fundradar.ui.TAB_INDEX
+import com.hukua.fundradar.ui.TAB_LIMIT
+import com.hukua.fundradar.ui.TAB_PORTFOLIO
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import com.hukua.fundradar.work.DailyScheduler
 
@@ -40,16 +42,31 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             FundRadarTheme {
-                val viewModel: FundViewModel = viewModel(factory = FundViewModel.factory(this))
+                // Two independent lists, one view model each.
+                val portfolioViewModel: FundViewModel = viewModel(
+                    key = "fund-portfolio",
+                    factory = FundViewModel.factory(this, FundScope.PORTFOLIO)
+                )
+                val limitViewModel: FundViewModel = viewModel(
+                    key = "fund-limit",
+                    factory = FundViewModel.factory(this, FundScope.LIMIT)
+                )
                 val indexViewModel: IndexViewModel = viewModel(factory = IndexViewModel.factory(this))
-                val detail by viewModel.detail.collectAsStateWithLifecycle()
+
+                val portfolioDetail by portfolioViewModel.detail.collectAsStateWithLifecycle()
+                val limitDetail by limitViewModel.detail.collectAsStateWithLifecycle()
+                val portfolioState by portfolioViewModel.state.collectAsStateWithLifecycle()
 
                 var route by rememberSaveable { mutableStateOf("list") }
-                var tab by rememberSaveable { mutableStateOf(TAB_FUND) }
+                var tab by rememberSaveable { mutableStateOf(TAB_PORTFOLIO) }
                 var settingsReturn by rememberSaveable { mutableStateOf("list") }
                 var klineSecid by rememberSaveable { mutableStateOf("") }
                 var klineCode by rememberSaveable { mutableStateOf("") }
                 var klineName by rememberSaveable { mutableStateOf("") }
+
+                val isLimitTab = tab == TAB_LIMIT
+                val activeViewModel = if (isLimitTab) limitViewModel else portfolioViewModel
+                val detail = if (isLimitTab) limitDetail else portfolioDetail
 
                 val openKline: (IndexEntry, String) -> Unit = { entry, trackedName ->
                     klineSecid = entry.secid
@@ -66,7 +83,7 @@ class MainActivity : ComponentActivity() {
                 // Detail is a page of its own now, not a bottom sheet: back from
                 // it lands on the fund list, never on a stale sheet.
                 val backToList: () -> Unit = {
-                    viewModel.closeDetail()
+                    activeViewModel.closeDetail()
                     route = "list"
                 }
 
@@ -78,9 +95,14 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Index quotes are cheap but change intraday; refresh on tab entry.
+                // Index quotes and intraday estimates move all session; refresh
+                // them whenever their tab comes back into view.
                 LaunchedEffect(tab, route) {
-                    if (route == "list" && tab == TAB_INDEX) indexViewModel.load()
+                    if (route != "list") return@LaunchedEffect
+                    when (tab) {
+                        TAB_INDEX -> indexViewModel.load()
+                        TAB_PORTFOLIO -> portfolioViewModel.refreshEstimates()
+                    }
                 }
 
                 val bottomBar: @Composable () -> Unit = {
@@ -93,17 +115,24 @@ class MainActivity : ComponentActivity() {
                     "fund" -> {
                         val state = detail
                         if (state == null) {
-                            // Removed from the watchlist (or restored without a
-                            // selection): nothing to show, fall back to the list.
+                            // Removed from the list (or restored without a
+                            // selection): nothing to show, fall back.
                             LaunchedEffect(Unit) { route = "list" }
                         } else {
                             FundDetailScreen(
                                 state = state,
                                 onBack = backToList,
                                 onRemove = { code ->
-                                    viewModel.removeFund(code)
+                                    activeViewModel.removeFund(code)
                                     route = "list"
-                                }
+                                },
+                                estimate = if (isLimitTab) {
+                                    null
+                                } else {
+                                    portfolioState.estimates[state.fund.code]
+                                },
+                                showLimitBadge = isLimitTab,
+                                removeLabel = if (isLimitTab) "从限购清单移除" else "从持仓移除"
                             )
                         }
                     }
@@ -128,11 +157,21 @@ class MainActivity : ComponentActivity() {
                             bottomBar = bottomBar
                         )
 
-                        else -> FundRadarScreen(
-                            viewModel = viewModel,
+                        TAB_LIMIT -> FundRadarScreen(
+                            viewModel = limitViewModel,
                             onOpenSettings = openSettings,
                             onOpenDetail = { fund ->
-                                viewModel.openDetail(fund)
+                                limitViewModel.openDetail(fund)
+                                route = "fund"
+                            },
+                            bottomBar = bottomBar
+                        )
+
+                        else -> FundRadarScreen(
+                            viewModel = portfolioViewModel,
+                            onOpenSettings = openSettings,
+                            onOpenDetail = { fund ->
+                                portfolioViewModel.openDetail(fund)
                                 route = "fund"
                             },
                             bottomBar = bottomBar

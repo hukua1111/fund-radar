@@ -71,6 +71,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hukua.fundradar.data.Fund
+import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.LimitChange
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -78,10 +79,10 @@ import java.util.Locale
 
 /** Funds suggested on the empty screen so the first run is not a blank page. */
 private val SUGGESTIONS = listOf(
-    "161725" to "招商中证白酒",
-    "110022" to "易方达消费行业",
-    "000001" to "华夏成长混合",
-    "005827" to "易方达蓝筹精选"
+    "008280" to "国泰煤炭ETF联接",
+    "020640" to "广发半导体设备",
+    "025833" to "天弘电网设备",
+    "025491" to "平安卫星产业"
 )
 
 @Composable
@@ -112,6 +113,7 @@ fun FundRadarScreen(
         onAddClick = viewModel::openAdd,
         onSuggestion = viewModel::addFund,
         onDismissChanges = viewModel::dismissChanges,
+        onImportPortfolio = viewModel::importPortfolio,
         onOpenSettings = onOpenSettings,
         bottomBar = bottomBar
     )
@@ -141,9 +143,11 @@ fun FundRadarContent(
     onAddClick: () -> Unit = {},
     onSuggestion: (String) -> Unit = {},
     onDismissChanges: () -> Unit = {},
+    onImportPortfolio: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     bottomBar: @Composable () -> Unit = {}
 ) {
+    val portfolio = state.scope.isPortfolio
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -158,7 +162,8 @@ fun FundRadarContent(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "自选基金 · 净值与申购限额",
+                            text = if (portfolio) "持仓概况 · 盘中估算涨跌"
+                            else "限购监控 · 申购状态与单日额度",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -184,11 +189,13 @@ fun FundRadarContent(
     ) { innerPadding ->
         if (state.watchlistEmpty && !state.loading) {
             EmptyWatchlist(
+                scope = state.scope,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
                 onAddClick = onAddClick,
-                onSuggestion = onSuggestion
+                onSuggestion = onSuggestion,
+                onImportPortfolio = onImportPortfolio
             )
             return@Scaffold
         }
@@ -205,7 +212,7 @@ fun FundRadarContent(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                if (state.changes.isNotEmpty()) {
+                if (!portfolio && state.changes.isNotEmpty()) {
                     item(key = "changes") {
                         ChangesCard(
                             changes = state.changes,
@@ -219,11 +226,13 @@ fun FundRadarContent(
 
                 item(key = "summary") { SummaryCard(state) }
 
-                item(key = "filters") {
-                    FilterRow(
-                        selected = state.filter,
-                        onSelect = onSelectFilter
-                    )
+                if (!portfolio) {
+                    item(key = "filters") {
+                        FilterRow(
+                            selected = state.filter,
+                            onSelect = onSelectFilter
+                        )
+                    }
                 }
 
                 when {
@@ -244,7 +253,12 @@ fun FundRadarContent(
 
                     else -> {
                         items(items = state.visible, key = { it.code }) { fund ->
-                            FundCard(fund = fund, onClick = { onOpenDetail(fund) })
+                            FundCard(
+                                fund = fund,
+                                onClick = { onOpenDetail(fund) },
+                                estimate = state.estimates[fund.code],
+                                showLimitBadge = !portfolio
+                            )
                         }
                         item(key = "footer") { Footer() }
                     }
@@ -300,7 +314,7 @@ fun AddFundSheetContent(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "输入基金代码或名称，点右侧 + 加入自选",
+                text = "输入基金代码或名称，点右侧 + 加入列表",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -438,10 +452,13 @@ private fun AddResultRow(
 
 @Composable
 private fun EmptyWatchlist(
+    scope: FundScope,
     modifier: Modifier = Modifier,
     onAddClick: () -> Unit,
-    onSuggestion: (String) -> Unit
+    onSuggestion: (String) -> Unit,
+    onImportPortfolio: () -> Unit
 ) {
+    val portfolio = scope.isPortfolio
     Column(
         modifier = modifier.padding(horizontal = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -463,13 +480,17 @@ private fun EmptyWatchlist(
         }
         Spacer(Modifier.height(20.dp))
         Text(
-            text = "还没有添加基金",
+            text = if (portfolio) "还没有添加持仓" else "还没有监控限购的基金",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "添加你关注的基金，随时查看它的限购状态和单日额度",
+            text = if (portfolio) {
+                "添加你持有的基金，这里只看概况和盘中估算涨跌，不判断限购"
+            } else {
+                "限购清单和持仓分开维护，只放你真正在意申购额度的基金"
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -482,9 +503,15 @@ private fun EmptyWatchlist(
         ) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("添加基金")
+            Text(if (portfolio) "添加基金" else "添加监控")
         }
-        Spacer(Modifier.height(28.dp))
+        if (!portfolio) {
+            Spacer(Modifier.height(10.dp))
+            TextButton(onClick = onImportPortfolio) {
+                Text("从持仓导入全部")
+            }
+        }
+        Spacer(Modifier.height(if (portfolio) 28.dp else 18.dp))
         Text(
             text = "试试这些",
             style = MaterialTheme.typography.labelMedium,
@@ -654,38 +681,69 @@ private fun SummaryCard(state: FundUiState) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "自选 " + state.all.size + " 只",
+                    text = (if (state.scope.isPortfolio) "持仓 " else "监控 ") +
+                        state.all.size + " 只",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
-                Spacer(Modifier.width(10.dp))
-                if (state.limitedCount > 0) {
-                    MiniPill(
-                        text = "限大额 " + state.limitedCount,
-                        container = MaterialTheme.colorScheme.tertiaryContainer,
-                        content = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
-                    Spacer(Modifier.width(6.dp))
-                }
-                if (state.suspendedCount > 0) {
-                    MiniPill(
-                        text = "暂停 " + state.suspendedCount,
-                        container = MaterialTheme.colorScheme.errorContainer,
-                        content = MaterialTheme.colorScheme.onErrorContainer
-                    )
+                if (state.scope.isPortfolio) {
+                    if (state.estimatesLoading) {
+                        Spacer(Modifier.width(8.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 1.5.dp
+                        )
+                    } else if (state.estimatedCount > 0) {
+                        Spacer(Modifier.width(10.dp))
+                        MiniPill(
+                            text = "估算 " + state.estimatedCount,
+                            container = MaterialTheme.colorScheme.secondaryContainer,
+                            content = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                } else {
+                    Spacer(Modifier.width(10.dp))
+                    if (state.limitedCount > 0) {
+                        MiniPill(
+                            text = "限大额 " + state.limitedCount,
+                            container = MaterialTheme.colorScheme.tertiaryContainer,
+                            content = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    if (state.suspendedCount > 0) {
+                        MiniPill(
+                            text = "暂停 " + state.suspendedCount,
+                            container = MaterialTheme.colorScheme.errorContainer,
+                            content = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(3.dp))
             Text(
                 text = buildString {
-                    append("更新于 ")
-                    append(timeText(state.updatedAt))
+                    if (state.scope.isPortfolio) {
+                        append("估算于 ")
+                        append(timeText(state.estimatesAt.takeIf { it > 0 } ?: state.updatedAt))
+                    } else {
+                        append("更新于 ")
+                        append(timeText(state.updatedAt))
+                    }
                     append(" · 天天基金公开数据")
                     if (state.fromCache) append(" · 离线缓存")
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (state.scope.isPortfolio) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "联接基金按目标 ETF 估算，其余按重仓股加权，仅供参考",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                )
+            }
         }
     }
 }

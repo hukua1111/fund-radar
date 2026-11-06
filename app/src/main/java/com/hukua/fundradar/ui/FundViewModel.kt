@@ -6,9 +6,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.hukua.fundradar.data.Estimate
+import com.hukua.fundradar.data.EstimateRepository
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundExtra
 import com.hukua.fundradar.data.FundRepository
+import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.data.LimitType
 import kotlinx.coroutines.Job
@@ -37,6 +40,7 @@ data class FundUiState(
     val all: List<Fund> = emptyList(),
     val visible: List<Fund> = emptyList(),
     val filter: FundFilter = FundFilter.ALL,
+    val scope: FundScope = FundScope.PORTFOLIO,
     val loading: Boolean = true,
     val refreshing: Boolean = false,
     val error: String? = null,
@@ -45,11 +49,19 @@ data class FundUiState(
     /** True when the user has not added any fund yet. */
     val watchlistEmpty: Boolean = true,
     /** Funds whose purchase limit moved during the last refresh. */
-    val changes: List<LimitChange> = emptyList()
+    val changes: List<LimitChange> = emptyList(),
+    /** Intraday estimates, keyed by fund code. Portfolio only. */
+    val estimates: Map<String, Estimate> = emptyMap(),
+    val estimatesLoading: Boolean = false,
+    val estimatesAt: Long = 0L
 ) {
     val limitedCount: Int get() = all.count { it.limitType == LimitType.LIMITED }
     val suspendedCount: Int get() = all.count { it.limitType == LimitType.SUSPENDED }
     val openCount: Int get() = all.count { it.limitType == LimitType.OPEN }
+
+    /** Funds with a usable estimate, and how many of those are ETF based. */
+    val estimatedCount: Int get() = all.count { estimates.containsKey(it.code) }
+    val etfCount: Int get() = estimates.values.count { it.source == com.hukua.fundradar.data.EstimateSource.ETF }
 
     fun derive(): FundUiState = copy(visible = all.filter { filter.matches(it) })
 }
@@ -72,10 +84,18 @@ sealed interface DetailState {
     data class Ready(override val fund: Fund, val extra: FundExtra?) : DetailState
 }
 
-class FundViewModel(private val repository: FundRepository) : ViewModel() {
+class FundViewModel(
+    private val repository: FundRepository,
+    private val estimateRepository: EstimateRepository
+) : ViewModel() {
+
+    val scope: FundScope get() = repository.scope
 
     private val _state = MutableStateFlow(
-        FundUiState(watchlistEmpty = repository.codes().isEmpty())
+        FundUiState(
+            scope = repository.scope,
+            watchlistEmpty = repository.codes().isEmpty()
+        )
     )
     val state: StateFlow<FundUiState> = _state.asStateFlow()
 
@@ -86,6 +106,7 @@ class FundViewModel(private val repository: FundRepository) : ViewModel() {
     val detail: StateFlow<DetailState?> = _detail.asStateFlow()
 
     private var searchJob: Job? = null
+    private var estimateJob: Job? = null
     private var searchSeq = 0
 
     init {
@@ -151,14 +172,49 @@ class FundViewModel(private val repository: FundRepository) : ViewModel() {
             current.copy(
                 all = current.all.filterNot { it.code == code },
                 changes = current.changes.filterNot { it.code == code },
+                estimates = current.estimates - code,
                 watchlistEmpty = repository.codes().isEmpty()
             ).derive()
+        }
+    }
+
+    /** Fills an empty limit watchlist with everything the user holds. */
+    fun importPortfolio() {
+        viewModelScope.launch {
+            val added = repository.importPortfolio()
+            if (added == 0 && repository.codes().isEmpty()) return@launch
+            load(force = true)
         }
     }
 
     /** Hides the "limit changed" card without touching the data. */
     fun dismissChanges() {
         _state.update { it.copy(changes = emptyList()) }
+    }
+
+    // ---------------------------------------------------------- estimates
+
+    /**
+     * Re-reads the intraday estimate for every fund already on screen. Cheap
+     * (one batched quote request) so it can run every time the tab is opened.
+     */
+    fun refreshEstimates() {
+        if (!scope.isPortfolio) return
+        val funds = _state.value.all
+        if (funds.isEmpty()) return
+        estimateJob?.cancel()
+        _state.update { it.copy(estimatesLoading = true) }
+        estimateJob = viewModelScope.launch {
+            val estimates = runCatching { estimateRepository.estimates(funds) }
+                .getOrDefault(emptyMap())
+            _state.update {
+                it.copy(
+                    estimates = estimates,
+                    estimatesLoading = false,
+                    estimatesAt = System.currentTimeMillis()
+                )
+            }
+        }
     }
 
     // ---------------------------------------------------------- detail
@@ -213,6 +269,7 @@ class FundViewModel(private val repository: FundRepository) : ViewModel() {
                             changes = result.changes
                         ).derive()
                     }
+                    if (scope.isPortfolio) refreshEstimates()
                 }
                 .onFailure { throwable ->
                     _state.update {
@@ -227,10 +284,14 @@ class FundViewModel(private val repository: FundRepository) : ViewModel() {
     }
 
     companion object {
-        fun factory(context: Context): ViewModelProvider.Factory = viewModelFactory {
-            initializer {
-                FundViewModel(FundRepository(context.applicationContext))
+        fun factory(context: Context, scope: FundScope): ViewModelProvider.Factory =
+            viewModelFactory {
+                initializer {
+                    FundViewModel(
+                        repository = FundRepository(context.applicationContext, scope),
+                        estimateRepository = EstimateRepository(context.applicationContext)
+                    )
+                }
             }
-        }
     }
 }

@@ -38,11 +38,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.hukua.fundradar.data.Estimate
+import com.hukua.fundradar.data.EstimateSource
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.growthText
 import com.hukua.fundradar.data.money
 import com.hukua.fundradar.data.navText
 import com.hukua.fundradar.data.riskText
+import java.util.Locale
 
 /**
  * Second-level page: everything about one fund, reached by tapping its card.
@@ -54,7 +57,11 @@ import com.hukua.fundradar.data.riskText
 fun FundDetailScreen(
     state: DetailState,
     onBack: () -> Unit,
-    onRemove: (String) -> Unit = {}
+    onRemove: (String) -> Unit = {},
+    /** Intraday estimate, portfolio page only. */
+    estimate: Estimate? = null,
+    showLimitBadge: Boolean = true,
+    removeLabel: String = "从自选移除"
 ) {
     val fund = state.fund
     val extra = (state as? DetailState.Ready)?.extra
@@ -110,8 +117,10 @@ fun FundDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Spacer(Modifier.width(12.dp))
-                LimitBadge(fund = fund)
+                if (showLimitBadge) {
+                    Spacer(Modifier.width(12.dp))
+                    LimitBadge(fund = fund)
+                }
             }
 
             if (state is DetailState.Loading) {
@@ -161,6 +170,37 @@ fun FundDetailScreen(
                         )
                     }
                 }
+            }
+
+            if (estimate != null) {
+                SectionTitle("今日估算")
+                DetailCard {
+                    DetailRow(
+                        "估算涨跌",
+                        growthText(estimate.percent),
+                        valueColor = growthColor(estimate.percent)
+                    )
+                    DetailRow(
+                        "估算净值",
+                        estimate.nav?.let { navText(it) } ?: "—"
+                    )
+                    DetailRow("估算依据", estimate.basis.ifBlank { estimate.sourceLabel })
+                    if (estimate.quoteTime.isNotBlank()) {
+                        DetailRow("行情时间", estimate.quoteTime)
+                    }
+                    if (estimate.source == EstimateSource.HOLDINGS && estimate.coverage > 0) {
+                        DetailRow(
+                            "重仓覆盖",
+                            String.format(Locale.US, "%.1f%%", estimate.coverage)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = estimate.sourceLabel + "，实际净值以基金公司公布为准",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             SectionTitle("申购限额")
@@ -241,7 +281,7 @@ fun FundDetailScreen(
                     tint = MaterialTheme.colorScheme.error
                 )
                 Spacer(Modifier.width(6.dp))
-                Text("从自选移除", color = MaterialTheme.colorScheme.error)
+                Text(removeLabel, color = MaterialTheme.colorScheme.error)
             }
         }
     }
@@ -302,7 +342,11 @@ private fun DetailMetric(
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
+private fun DetailRow(
+    label: String,
+    value: String,
+    valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -318,7 +362,7 @@ private fun DetailRow(label: String, value: String) {
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
+            color = valueColor,
             modifier = Modifier.weight(1f)
         )
     }

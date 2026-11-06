@@ -4,10 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
-import java.util.zip.GZIPInputStream
 
 /** Result of checking a secid against the quote endpoint. */
 enum class IndexProbeStatus { OK, MISSING, UNREACHABLE }
@@ -29,9 +27,6 @@ data class IndexProbe(val status: IndexProbeStatus, val name: String = "")
  * available.
  */
 object EastMoneyApi {
-
-    private const val UA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     /** Public token baked into the 行情 search box, not a secret of any kind. */
     private const val SEARCH_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
@@ -446,31 +441,5 @@ object EastMoneyApi {
         url: String,
         referer: String = "https://fund.eastmoney.com/",
         readTimeoutMs: Int = 12_000
-    ): String = withContext(Dispatchers.IO) {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8_000
-            readTimeout = readTimeoutMs
-            requestMethod = "GET"
-            setRequestProperty("User-Agent", UA)
-            setRequestProperty("Referer", referer)
-            setRequestProperty("Accept", "text/html,application/xhtml+xml,*/*")
-            setRequestProperty("Accept-Encoding", "gzip")
-            setRequestProperty("Connection", "close")
-        }
-        try {
-            val status = connection.responseCode
-            if (status !in 200..299) {
-                throw IllegalStateException("服务器返回 HTTP $status")
-            }
-            val stream = connection.inputStream
-            val decoded = if (connection.contentEncoding?.contains("gzip", true) == true) {
-                GZIPInputStream(stream)
-            } else {
-                stream
-            }
-            decoded.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        } finally {
-            connection.disconnect()
-        }
-    }
+    ): String = Net.get(url, referer = referer, readTimeoutMs = readTimeoutMs)
 }

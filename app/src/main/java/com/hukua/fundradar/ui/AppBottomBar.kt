@@ -9,8 +9,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
 
-const val TAB_FUND = "fund"
+const val TAB_PORTFOLIO = "portfolio"
+const val TAB_LIMIT = "limit"
 const val TAB_INDEX = "index"
+
+/** Kept so old previews/tests keep compiling; the portfolio is the fund tab. */
+const val TAB_FUND = TAB_PORTFOLIO
 
 /** Bottom navigation shared by the app and the screenshot tests. */
 @Composable
@@ -20,10 +24,20 @@ fun AppBottomBar(selected: String, onSelect: (String) -> Unit) {
         tonalElevation = 0.dp
     ) {
         NavigationBarItem(
-            selected = selected == TAB_FUND,
-            onClick = { onSelect(TAB_FUND) },
-            icon = { Icon(FundTabIcon, contentDescription = null) },
-            label = { Text("基金") },
+            selected = selected == TAB_PORTFOLIO,
+            onClick = { onSelect(TAB_PORTFOLIO) },
+            icon = { Icon(PortfolioTabIcon, contentDescription = null) },
+            label = { Text("持仓") },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                indicatorColor = MaterialTheme.colorScheme.secondaryContainer
+            )
+        )
+        NavigationBarItem(
+            selected = selected == TAB_LIMIT,
+            onClick = { onSelect(TAB_LIMIT) },
+            icon = { Icon(LimitTabIcon, contentDescription = null) },
+            label = { Text("限购") },
             colors = NavigationBarItemDefaults.colors(
                 selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
                 indicatorColor = MaterialTheme.colorScheme.secondaryContainer

@@ -11,6 +11,8 @@ import androidx.compose.ui.test.printToString
 import com.hukua.fundradar.data.AiConfig
 import com.hukua.fundradar.data.AiVerdict
 import com.hukua.fundradar.data.Candle
+import com.hukua.fundradar.data.Estimate
+import com.hukua.fundradar.data.EstimateSource
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundExtra
 import com.hukua.fundradar.data.IndexEntry
@@ -198,7 +200,17 @@ class FeatureScreenshotTest {
                             scale = "12.4 亿元"
                         )
                     ),
-                    onBack = {}
+                    onBack = {},
+                    estimate = Estimate(
+                        percent = 1.85,
+                        nav = 1.0377,
+                        source = EstimateSource.HOLDINGS,
+                        basis = "10 只重仓股",
+                        quoteTime = "11-05 15:00",
+                        coverage = 61.8
+                    ),
+                    showLimitBadge = false,
+                    removeLabel = "从持仓移除"
                 )
             }
         }
