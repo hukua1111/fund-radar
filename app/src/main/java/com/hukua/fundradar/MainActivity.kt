@@ -24,6 +24,8 @@ import com.hukua.fundradar.ui.AppBottomBar
 import com.hukua.fundradar.ui.FundDetailScreen
 import com.hukua.fundradar.ui.FundRadarScreen
 import com.hukua.fundradar.ui.FundViewModel
+import com.hukua.fundradar.ui.HoldingMode
+import com.hukua.fundradar.ui.HoldingSheet
 import com.hukua.fundradar.ui.IndexScreen
 import com.hukua.fundradar.ui.IndexViewModel
 import com.hukua.fundradar.ui.KlineScreen
@@ -65,6 +67,8 @@ class MainActivity : ComponentActivity() {
                 val limitState by limitViewModel.state.collectAsStateWithLifecycle()
                 val portfolioTrackPicker by portfolioViewModel.trackPicker.collectAsStateWithLifecycle()
                 val limitTrackPicker by limitViewModel.trackPicker.collectAsStateWithLifecycle()
+                val portfolioHoldingSheet by portfolioViewModel.holdingSheet.collectAsStateWithLifecycle()
+                val limitHoldingSheet by limitViewModel.holdingSheet.collectAsStateWithLifecycle()
 
                 var route by rememberSaveable { mutableStateOf("list") }
                 var tab by rememberSaveable { mutableStateOf(TAB_PORTFOLIO) }
@@ -138,6 +142,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             val overrides = if (isLimitTab) limitState.overrides else portfolioState.overrides
                             val picker = if (isLimitTab) limitTrackPicker else portfolioTrackPicker
+                            val holdingSheet = if (isLimitTab) limitHoldingSheet else portfolioHoldingSheet
 
                             FundDetailScreen(
                                 state = state,
@@ -155,8 +160,42 @@ class MainActivity : ComponentActivity() {
                                 removeLabel = if (isLimitTab) "从限购清单移除" else "从持仓移除",
                                 trackOverride = overrides[state.fund.code],
                                 onEditTrack = { activeViewModel.openTrackPicker(state.fund) },
-                                onClearTrack = { activeViewModel.clearTrack(state.fund.code) }
+                                onClearTrack = { activeViewModel.clearTrack(state.fund.code) },
+                                showFundFacts = isLimitTab,
+                                holding = if (isLimitTab) null else {
+                                    portfolioState.holdings[state.fund.code]
+                                },
+                                onBuy = {
+                                    if (!isLimitTab) {
+                                        activeViewModel.openHoldingSheet(state.fund, HoldingMode.BUY)
+                                    }
+                                },
+                                onSell = {
+                                    if (!isLimitTab) {
+                                        activeViewModel.openHoldingSheet(state.fund, HoldingMode.SELL)
+                                    }
+                                },
+                                onEditHolding = {
+                                    if (!isLimitTab) {
+                                        activeViewModel.openHoldingSheet(state.fund, HoldingMode.EDIT)
+                                    }
+                                },
+                                onRemoveHolding = { activeViewModel.removeHolding(state.fund.code) }
                             )
+
+                            if (holdingSheet.open) {
+                                HoldingSheet(
+                                    state = holdingSheet,
+                                    onModeChange = activeViewModel::onHoldingModeChange,
+                                    onSharesChange = activeViewModel::onHoldingSharesChange,
+                                    onCostChange = activeViewModel::onHoldingCostChange,
+                                    onAmountChange = activeViewModel::onHoldingAmountChange,
+                                    onNavChange = activeViewModel::onHoldingNavChange,
+                                    onFillAll = activeViewModel::fillAllShares,
+                                    onSubmit = activeViewModel::submitHolding,
+                                    onDismiss = activeViewModel::closeHoldingSheet
+                                )
+                            }
 
                             if (picker.open) {
                                 TrackIndexSheet(

@@ -5,8 +5,10 @@ import com.hukua.fundradar.data.FundDetail
 import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.normalizeIndexName
 import com.hukua.fundradar.data.resolveIndex
+import com.hukua.fundradar.data.searchVariants
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IndexNameTest {
@@ -27,6 +29,17 @@ class IndexNameTest {
         assertEquals("白酒", normalizeIndexName("中证白酒指数"))
         assertEquals("300", normalizeIndexName("沪深300指数"))
         assertEquals("半导体芯片", normalizeIndexName("国证半导体芯片指数"))
+    }
+
+    @Test
+    fun trackedNamesTryShorterVariants() {
+        val variants = searchVariants("中证电网设备主题指数")
+        assertEquals("中证电网设备主题指数", variants.first())
+        // 行情搜索只认「电网设备主题」，带「中证…指数」一条都搜不出来。
+        assertTrue(variants.contains("中证电网设备主题"))
+        assertTrue(variants.contains("电网设备主题"))
+        assertTrue(searchVariants("中证白酒指数").contains("中证白酒"))
+        assertTrue(searchVariants("  ").isEmpty())
     }
 
     @Test

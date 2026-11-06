@@ -73,6 +73,44 @@ fun splitIndexName(raw: String): IndexNameParts {
 fun normalizeIndexName(raw: String): String = splitIndexName(raw).core
 
 /**
+ * 跟踪标的名的几种写法，按信息量从多到少排：
+ *
+ * ```
+ * 中证电网设备主题指数 → 中证电网设备主题 → 电网设备主题指数 → 电网设备主题
+ * ```
+ *
+ * 行情搜索接口对完整名称（尤其是带「指数」的）经常返回空，去掉发布方前缀和
+ * 后缀之后才搜得到。每一种都试一遍，命中即用。
+ */
+internal fun searchVariants(trackedName: String): List<String> {
+    val raw = trackedName.trim()
+    if (raw.isEmpty()) return emptyList()
+
+    val out = LinkedHashSet<String>()
+    out += raw
+
+    var text = raw
+    var guard = 0
+    while (guard++ < 4) {
+        val suffix = SUFFIXES.firstOrNull { text.length > it.length + 1 && text.endsWith(it) }
+            ?: break
+        text = text.removeSuffix(suffix)
+        out += text
+    }
+
+    out.toList().forEach { name ->
+        val family = PREFIXES.firstOrNull { name.length > it.length + 1 && name.startsWith(it) }
+        if (family != null) {
+            val short = name.removePrefix(family)
+            out += short
+            val core = short.removeSuffix("主题")
+            if (core.length > 1 && core != short) out += core
+        }
+    }
+    return out.toList()
+}
+
+/**
  * Matches a 跟踪标的 name against the index catalogue. Only exact matches or
  * near-equal containment count, so we never silently chart the wrong index.
  */
@@ -239,23 +277,26 @@ object IndexCatalog {
         cache[key]?.let { return parseCached(it) }
         if (key in resolveMisses) return null
 
-        val candidates = runCatching { EastMoneyApi.searchIndices(trackedName) }
-            .getOrDefault(emptyList())
-        if (candidates.isEmpty()) {
-            resolveMisses += key
-            return null
+        // 行情搜索要的是「中证煤炭」「电网设备主题」这种短名，带「…指数」的
+        // 全称经常一条都搜不出来，所以按信息量从多到少试几种写法。
+        for (variant in searchVariants(trackedName)) {
+            val candidates = runCatching { EastMoneyApi.searchIndices(variant) }
+                .getOrDefault(emptyList())
+            if (candidates.isEmpty()) continue
+
+            // 同一个词可能同时命中 指数 / 板块；用和本地目录一样的打分逻辑挑最像的
+            val best = resolveIndex(trackedName, candidates)
+                ?: resolveIndex(variant, candidates)
+                ?: candidates.firstOrNull()
+                ?: continue
+
+            cache[key] = "${best.secid}|${best.name}"
+            runCatching { saveResolveCache(context, cache) }
+            return best
         }
 
-        // 同一个词可能同时命中 指数 / 板块；用和本地目录一样的打分逻辑挑最像的
-        val best = resolveIndex(trackedName, candidates) ?: candidates.firstOrNull()
-        if (best == null) {
-            resolveMisses += key
-            return null
-        }
-
-        cache[key] = "${best.secid}|${best.name}"
-        runCatching { saveResolveCache(context, cache) }
-        return best
+        resolveMisses += key
+        return null
     }
 
     private fun parseCached(value: String): IndexEntry? {

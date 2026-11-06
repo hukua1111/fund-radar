@@ -34,9 +34,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hukua.fundradar.data.Estimate
 import com.hukua.fundradar.data.Fund
+import com.hukua.fundradar.data.Holding
 import com.hukua.fundradar.data.LimitType
+import com.hukua.fundradar.data.amountText
 import com.hukua.fundradar.data.growthText
 import com.hukua.fundradar.data.navText
+import com.hukua.fundradar.data.signedAmountText
 import com.hukua.fundradar.ui.theme.LocalMarketColors
 
 /**
@@ -63,7 +66,9 @@ fun FundCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     estimate: Estimate? = null,
-    showLimitBadge: Boolean = true
+    showLimitBadge: Boolean = true,
+    /** 我的持仓，持仓页才传。 */
+    holding: Holding? = null
 ) {
     Surface(
         onClick = onClick,
@@ -130,6 +135,15 @@ fun FundCard(
                 )
             }
 
+            if (!showLimitBadge && holding != null && !holding.isEmpty) {
+                Spacer(Modifier.height(10.dp))
+                HoldingStrip(
+                    holding = holding,
+                    nav = estimate?.nav ?: fund.nav,
+                    percent = estimate?.takeIf { it.isRealtime }?.percent
+                )
+            }
+
             if (!showLimitBadge) {
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -141,6 +155,71 @@ fun FundCard(
                 )
             }
         }
+    }
+}
+
+/**
+ * 持仓条：市值 / 今日盈亏 / 累计盈亏。只在填过份额的基金上出现，三列数字，
+ * 不额外占太多高度。
+ */
+@Composable
+private fun HoldingStrip(holding: Holding, nav: Double, percent: Double?) {
+    val value = holding.marketValue(nav)
+    val profit = holding.profit(nav)
+    val profitPercent = holding.profitPercent(nav)
+    val today = percent?.let { holding.todayProfit(nav, it) }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.6f)
+    ) {
+        Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            HoldingCell(
+                label = "持有市值",
+                value = amountText(value),
+                modifier = Modifier.weight(1f)
+            )
+            HoldingCell(
+                label = "今日盈亏",
+                value = today?.let { signedAmountText(it) } ?: "—",
+                color = today?.let { growthColor(it) },
+                modifier = Modifier.weight(1f)
+            )
+            HoldingCell(
+                label = "累计盈亏",
+                value = signedAmountText(profit) +
+                    (profitPercent?.let { "  " + growthText(it) } ?: ""),
+                color = growthColor(profit),
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun HoldingCell(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    color: Color? = null
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = color ?: MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
     }
 }
 

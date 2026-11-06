@@ -25,10 +25,9 @@ data class EstimateBatch(
  * Turns "what does this fund hold" into "how much is it up today".
  *
  * The chain is: [PositionApi] for the holdings (cached for a week, they only
- * change quarterly) → [QuoteApi] for one batched quote request → a weighted
- * change. Feeder funds use the ETF's own move; everything else falls back to
- * the weighted move of its top ten stocks, then to its tracked index, and
- * finally to the last published NAV change.
+ * change quarterly) → [QuoteApi] for one batched quote request (plus
+ * [IndexQuoteApi] for the tracked indices) → 目标 ETF → 标的指数 → 重仓股
+ * 加权 → 最近公布的净值。
  *
  * 天天基金自己的盘中估值接口已被叫停，所以这里全部靠交易所的实时行情自己算。
  */
@@ -79,22 +78,36 @@ class EstimateRepository(context: Context) {
         if (dirty.get()) writeCache()
 
         val symbols = LinkedHashSet<String>()
-        resolved.forEach { (fund, position) ->
+        resolved.forEach { (_, position) ->
             position?.etfCode?.takeIf { it.isNotBlank() }?.let { symbols += exchangeSymbol(it) }
             position?.stocks?.forEach { symbols += exchangeSymbol(it.code, it.market) }
-            proxies[fund.code]?.let { symbols += indexQuoteSymbol(it) }
         }
-        if (symbols.isEmpty()) {
+
+        // 跟踪标的指数单独走东财：腾讯只认得 000xxx / 399xxx，中证自有的
+        // 930xxx / 931xxx（如 931994 电网设备主题）在腾讯那边查不到。
+        val indexEntries = resolved.mapNotNull { (fund, _) -> proxies[fund.code] }
+            .distinctBy { it.secid }
+        val indexQuotes = if (indexEntries.isEmpty()) {
+            emptyMap()
+        } else {
+            runCatching { IndexQuoteApi.fetch(indexEntries) }.getOrDefault(emptyMap())
+        }
+
+        if (symbols.isEmpty() && indexQuotes.isEmpty()) {
             return@withContext EstimateBatch(error = "没有可用的持仓或指数数据", at = now)
         }
 
-        val quotes = QuoteApi.fetch(symbols)
-        val error = if (quotes.isEmpty()) "行情源暂时没有响应，稍后会自动重试" else null
+        val quotes = if (symbols.isEmpty()) emptyMap() else QuoteApi.fetch(symbols)
+        val error = if (quotes.isEmpty() && indexQuotes.isEmpty()) {
+            "行情源暂时没有响应，稍后会自动重试"
+        } else {
+            null
+        }
 
         val result = LinkedHashMap<String, Estimate>()
         resolved.forEach { (fund, position) ->
             val proxy = proxies[fund.code]?.let { entry ->
-                quotes[indexQuoteSymbol(entry)]?.let { entry to it }
+                indexQuotes[entry.secid]?.let { entry to it }
             }
             estimateFund(fund, position, quotes, proxy)?.let { result[fund.code] = it }
         }

@@ -13,10 +13,14 @@ import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundExtra
 import com.hukua.fundradar.data.FundRepository
 import com.hukua.fundradar.data.FundScope
+import com.hukua.fundradar.data.Holding
+import com.hukua.fundradar.data.HoldingStore
 import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.IndexRepository
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.data.LimitType
+import com.hukua.fundradar.data.Trade
+import com.hukua.fundradar.data.TradeKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -27,6 +31,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.Locale
 
 enum class FundFilter(val label: String) {
     ALL("全部"),
@@ -63,7 +68,9 @@ data class FundUiState(
     /** 行情源整体不可用时给用户一句解释。 */
     val estimatesError: String? = null,
     /** 用户手动指定的「基金 → 指数」，覆盖按名字自动匹配。 */
-    val overrides: Map<String, IndexEntry> = emptyMap()
+    val overrides: Map<String, IndexEntry> = emptyMap(),
+    /** 用户自己的持仓（份额 / 成本 / 已实现盈亏），仅持仓页使用。 */
+    val holdings: Map<String, Holding> = emptyMap()
 ) {
     val limitedCount: Int get() = all.count { it.limitType == LimitType.LIMITED }
     val suspendedCount: Int get() = all.count { it.limitType == LimitType.SUSPENDED }
@@ -72,6 +79,37 @@ data class FundUiState(
     /** Funds with a usable estimate, and how many of those are ETF based. */
     val estimatedCount: Int get() = all.count { estimates[it.code]?.isRealtime == true }
     val etfCount: Int get() = estimates.values.count { it.source == com.hukua.fundradar.data.EstimateSource.ETF }
+
+    /** 估算净值优先，拿不到估算就用最近公布的净值。 */
+    fun navOf(fund: Fund): Double = estimates[fund.code]?.nav ?: fund.nav
+
+    fun holdingOf(fund: Fund): Holding? = holdings[fund.code]?.takeUnless { it.isEmpty }
+
+    /** 有持仓的基金（按份额降序，默认列表顺序不受影响）。 */
+    val holdingFunds: List<Fund>
+        get() = all.filter { holdingOf(it) != null }
+            .sortedByDescending { holdingOf(it)?.marketValue(navOf(it)) ?: 0.0 }
+
+    /** 持仓总市值。 */
+    val holdingValue: Double
+        get() = all.sumOf { fund -> holdingOf(fund)?.marketValue(navOf(fund)) ?: 0.0 }
+
+    /** 持仓总成本。 */
+    val holdingCost: Double get() = all.sumOf { holdingOf(it)?.cost ?: 0.0 }
+
+    /** 累计浮动盈亏。 */
+    val holdingProfit: Double get() = holdingValue - holdingCost
+
+    /**
+     * 今日盈亏 = 各基金市值 × 涨跌幅 / (100 + 涨跌幅)。
+     * 只算真·盘中估算的基金 ——「最近公布净值」那条不是今天的涨跌。
+     */
+    val holdingTodayProfit: Double
+        get() = all.sumOf { fund ->
+            val holding = holdingOf(fund) ?: return@sumOf 0.0
+            val estimate = estimates[fund.code]?.takeIf { it.isRealtime } ?: return@sumOf 0.0
+            holding.todayProfit(navOf(fund), estimate.percent) ?: 0.0
+        }
 
     fun derive(): FundUiState = copy(visible = all.filter { filter.matches(it) })
 }
@@ -107,10 +145,58 @@ data class TrackPickerState(
     val current: IndexEntry? = null
 )
 
+/** 持仓面板的三种用法：记一笔买入、记一笔卖出、直接照着 App 填份额与成本。 */
+enum class HoldingMode(val label: String) {
+    BUY("买入"),
+    SELL("卖出"),
+    EDIT("修改持仓")
+}
+
+/** 「我的持仓」底部弹层的状态，输入全部保留成字符串，方便带小数点输入。 */
+data class HoldingSheetState(
+    val open: Boolean = false,
+    val fundCode: String = "",
+    val fundName: String = "",
+    val mode: HoldingMode = HoldingMode.BUY,
+    val shares: String = "",
+    val cost: String = "",
+    val amount: String = "",
+    val nav: String = "",
+    val message: String? = null,
+    /** 打开面板时已有的持仓，用于校验卖出份额、显示均价。 */
+    val current: Holding = Holding()
+) {
+    val navValue: Double get() = nav.toDoubleOrNull() ?: 0.0
+    val amountValue: Double get() = amount.toDoubleOrNull() ?: 0.0
+    val sharesValue: Double get() = shares.toDoubleOrNull() ?: 0.0
+    val costValue: Double get() = cost.toDoubleOrNull() ?: 0.0
+
+    /** 买入按金额折算份额，卖出与直接修改按份额。 */
+    val effectiveShares: Double
+        get() = when (mode) {
+            HoldingMode.BUY -> if (navValue > 0) amountValue / navValue else 0.0
+            HoldingMode.SELL, HoldingMode.EDIT -> sharesValue
+        }
+
+    /** 本次成交金额（估算）；直接修改时就是成本。 */
+    val effectiveAmount: Double
+        get() = if (mode == HoldingMode.EDIT) costValue else effectiveShares * navValue
+
+    val valid: Boolean
+        get() = when (mode) {
+            HoldingMode.BUY -> amountValue > 0 && navValue > 0
+            HoldingMode.SELL -> sharesValue > 0 && navValue > 0 &&
+                sharesValue <= current.shares + Holding.EPS
+            HoldingMode.EDIT -> sharesValue >= 0 && costValue >= 0 &&
+                (sharesValue > 0 || costValue == 0.0)
+        }
+}
+
 class FundViewModel(
     private val repository: FundRepository,
     private val estimateRepository: EstimateRepository,
-    private val indexRepository: IndexRepository
+    private val indexRepository: IndexRepository,
+    private val holdingStore: HoldingStore
 ) : ViewModel() {
 
     val scope: FundScope get() = repository.scope
@@ -119,7 +205,8 @@ class FundViewModel(
         FundUiState(
             scope = repository.scope,
             watchlistEmpty = repository.codes().isEmpty(),
-            overrides = indexRepository.trackOverrides()
+            overrides = indexRepository.trackOverrides(),
+            holdings = holdingStore.all()
         )
     )
     val state: StateFlow<FundUiState> = _state.asStateFlow()
@@ -132,6 +219,9 @@ class FundViewModel(
 
     private val _trackPicker = MutableStateFlow(TrackPickerState())
     val trackPicker: StateFlow<TrackPickerState> = _trackPicker.asStateFlow()
+
+    private val _holdingSheet = MutableStateFlow(HoldingSheetState())
+    val holdingSheet: StateFlow<HoldingSheetState> = _holdingSheet.asStateFlow()
 
     private var searchJob: Job? = null
     private var estimateJob: Job? = null
@@ -199,6 +289,7 @@ class FundViewModel(
     fun removeFund(code: String) {
         repository.remove(code)
         indexRepository.clearTrack(code)
+        holdingStore.remove(code)
         _detail.value = null
         _state.update { current ->
             current.copy(
@@ -206,6 +297,7 @@ class FundViewModel(
                 changes = current.changes.filterNot { it.code == code },
                 estimates = current.estimates - code,
                 overrides = current.overrides - code,
+                holdings = current.holdings - code,
                 watchlistEmpty = repository.codes().isEmpty()
             ).derive()
         }
@@ -285,6 +377,12 @@ class FundViewModel(
     // ---------------------------------------------------------- detail
 
     fun openDetail(fund: Fund) {
+        // 持仓页不看申购限额与基金档案，直接用列表里已有的数据渲染，
+        // 少一次基金页请求，点开就是完整内容。
+        if (scope.isPortfolio) {
+            _detail.value = DetailState.Ready(fund, null)
+            return
+        }
         _detail.value = DetailState.Loading(fund)
         viewModelScope.launch {
             val extra = repository.extra(fund.code)
@@ -350,6 +448,136 @@ class FundViewModel(
         _state.update { it.copy(overrides = indexRepository.trackOverrides()) }
     }
 
+    // ------------------------------------------------------------ 我的持仓
+
+    fun openHoldingSheet(fund: Fund, mode: HoldingMode = HoldingMode.BUY) {
+        val holding = holdingStore.get(fund.code) ?: Holding()
+        val nav = _state.value.navOf(fund)
+        _holdingSheet.value = HoldingSheetState(
+            open = true,
+            fundCode = fund.code,
+            fundName = fund.name,
+            mode = mode,
+            shares = when (mode) {
+                HoldingMode.SELL -> holding.shares.takeIf { it > 0 }?.let(::plainShares) ?: ""
+                HoldingMode.EDIT -> plainShares(holding.shares)
+                HoldingMode.BUY -> ""
+            },
+            cost = if (mode == HoldingMode.EDIT) plainMoney(holding.cost) else "",
+            amount = "",
+            nav = if (nav > 0) plainNav(nav) else "",
+            current = holding
+        )
+    }
+
+    fun closeHoldingSheet() {
+        _holdingSheet.value = HoldingSheetState()
+    }
+
+    fun onHoldingModeChange(mode: HoldingMode) {
+        val sheet = _holdingSheet.value
+        if (sheet.mode == mode) return
+        _holdingSheet.value = sheet.copy(
+            mode = mode,
+            message = null,
+            shares = when (mode) {
+                HoldingMode.SELL -> sheet.current.shares.takeIf { it > 0 }?.let(::plainShares) ?: ""
+                HoldingMode.EDIT -> plainShares(sheet.current.shares)
+                HoldingMode.BUY -> ""
+            },
+            cost = if (mode == HoldingMode.EDIT) plainMoney(sheet.current.cost) else ""
+        )
+    }
+
+    fun onHoldingSharesChange(value: String) {
+        _holdingSheet.update { it.copy(shares = value.filterNumeric(), message = null) }
+    }
+
+    fun onHoldingCostChange(value: String) {
+        _holdingSheet.update { it.copy(cost = value.filterNumeric(), message = null) }
+    }
+
+    fun onHoldingAmountChange(value: String) {
+        _holdingSheet.update { it.copy(amount = value.filterNumeric(), message = null) }
+    }
+
+    fun onHoldingNavChange(value: String) {
+        _holdingSheet.update { it.copy(nav = value.filterNumeric(), message = null) }
+    }
+
+    /** 卖出面板上的「全部」：份额直接填满。 */
+    fun fillAllShares() {
+        val sheet = _holdingSheet.value
+        if (sheet.current.shares > 0) {
+            _holdingSheet.update { it.copy(shares = plainShares(sheet.current.shares)) }
+        }
+    }
+
+    fun submitHolding() {
+        val sheet = _holdingSheet.value
+        if (sheet.fundCode.isBlank()) return
+        if (!sheet.valid) {
+            _holdingSheet.update { it.copy(message = invalidHint(it)) }
+            return
+        }
+
+        when (sheet.mode) {
+            HoldingMode.EDIT -> holdingStore.save(
+                sheet.fundCode,
+                sheet.current.withBase(sheet.sharesValue, sheet.costValue)
+            )
+
+            HoldingMode.BUY, HoldingMode.SELL -> holdingStore.apply(
+                sheet.fundCode,
+                Trade(
+                    id = System.currentTimeMillis(),
+                    kind = if (sheet.mode == HoldingMode.BUY) TradeKind.BUY else TradeKind.SELL,
+                    shares = sheet.effectiveShares,
+                    nav = sheet.navValue,
+                    at = System.currentTimeMillis()
+                )
+            )
+        }
+        publishHoldings()
+        closeHoldingSheet()
+    }
+
+    fun removeHolding(fundCode: String) {
+        holdingStore.remove(fundCode)
+        publishHoldings()
+    }
+
+    private fun publishHoldings() {
+        _state.update { it.copy(holdings = holdingStore.all()) }
+    }
+
+    private fun invalidHint(sheet: HoldingSheetState): String = when (sheet.mode) {
+        HoldingMode.BUY -> if (sheet.navValue <= 0) "请填写成交净值" else "请填写买入金额"
+        HoldingMode.SELL -> when {
+            sheet.sharesValue <= 0 -> "请填写卖出份额"
+            sheet.navValue <= 0 -> "请填写成交净值"
+            else -> "卖出份额不能超过持有份额"
+        }
+        HoldingMode.EDIT -> "份额与成本请填写非负数字"
+    }
+
+    private fun String.filterNumeric(): String =
+        filter { it.isDigit() || it == '.' }
+            .let { text ->
+                val first = text.indexOf('.')
+                if (first < 0) text
+                else text.substring(0, first + 1) + text.substring(first + 1).replace(".", "")
+            }
+
+    private fun plainShares(value: Double): String =
+        if (value <= 0) "" else String.format(Locale.US, "%.4f", value).trimEnd('0').trimEnd('.')
+
+    private fun plainMoney(value: Double): String =
+        if (value <= 0) "" else String.format(Locale.US, "%.2f", value)
+
+    private fun plainNav(value: Double): String =
+        String.format(Locale.US, "%.4f", value)
+
     fun consumeError() {
         _state.update { it.copy(error = null) }
     }
@@ -383,7 +611,8 @@ class FundViewModel(
                             error = null,
                             watchlistEmpty = codes.isEmpty(),
                             changes = result.changes,
-                            overrides = indexRepository.trackOverrides()
+                            overrides = indexRepository.trackOverrides(),
+                            holdings = holdingStore.all()
                         ).derive()
                     }
                     if (scope.isPortfolio) refreshEstimates()
@@ -413,7 +642,8 @@ class FundViewModel(
                     FundViewModel(
                         repository = FundRepository(context.applicationContext, scope),
                         estimateRepository = EstimateRepository(context.applicationContext),
-                        indexRepository = IndexRepository(context.applicationContext)
+                        indexRepository = IndexRepository(context.applicationContext),
+                        holdingStore = HoldingStore(context.applicationContext)
                     )
                 }
             }

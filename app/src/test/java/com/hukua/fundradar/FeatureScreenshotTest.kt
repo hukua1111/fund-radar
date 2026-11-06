@@ -15,6 +15,7 @@ import com.hukua.fundradar.data.Estimate
 import com.hukua.fundradar.data.EstimateSource
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundExtra
+import com.hukua.fundradar.data.Holding
 import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.IndexQuote
 import com.hukua.fundradar.data.KlineSeries
@@ -25,6 +26,9 @@ import com.hukua.fundradar.ui.AddIndexSheetContent
 import com.hukua.fundradar.ui.AppBottomBar
 import com.hukua.fundradar.ui.DetailState
 import com.hukua.fundradar.ui.FundDetailScreen
+import com.hukua.fundradar.ui.HoldingMode
+import com.hukua.fundradar.ui.HoldingSheetContent
+import com.hukua.fundradar.ui.HoldingSheetState
 import com.hukua.fundradar.ui.IndexAddState
 import com.hukua.fundradar.ui.IndexContent
 import com.hukua.fundradar.ui.IndexItem
@@ -213,13 +217,139 @@ class FeatureScreenshotTest {
                         coverage = 61.8
                     ),
                     showLimitBadge = false,
-                    removeLabel = "从持仓移除"
+                    removeLabel = "从持仓移除",
+                    showFundFacts = false,
+                    holding = Holding(
+                        shares = 12_000.0,
+                        cost = 11_800.0,
+                        realized = 360.0,
+                        trades = listOf(
+                            com.hukua.fundradar.data.Trade(
+                                id = 2L,
+                                kind = com.hukua.fundradar.data.TradeKind.BUY,
+                                shares = 6000.0,
+                                nav = 1.0020,
+                                at = System.currentTimeMillis()
+                            )
+                        )
+                    )
                 )
             }
         }
         compose.waitForIdle()
         save("fund-detail")
         dump("tree-fund-detail.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h1200dp-xxhdpi")
+    fun fundDetailWithLimitFacts() {
+        val fund = Fund(
+            code = "161725",
+            name = "招商中证白酒指数(LOF)A",
+            type = "指数型-股票",
+            nav = 0.5676,
+            accNav = 2.2837,
+            dayGrowth = 5.58,
+            buyStatus = "限大额",
+            sellStatus = "开放赎回",
+            minBuy = 10.0,
+            maxBuy = 500_000.0,
+            rate = "0.10%",
+            sourceRate = "1.00%",
+            riskLevel = 4,
+            navDate = "2026-10-30",
+            trackIndex = "中证白酒指数"
+        )
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                FundDetailScreen(
+                    state = DetailState.Ready(
+                        fund,
+                        FundExtra(
+                            company = "招商基金",
+                            manager = "侯昊",
+                            established = "2015-05-27",
+                            scale = "512.6 亿元"
+                        )
+                    ),
+                    onBack = {},
+                    showLimitBadge = true,
+                    removeLabel = "从限购清单移除",
+                    showFundFacts = true
+                )
+            }
+        }
+        compose.waitForIdle()
+        save("fund-detail-limit")
+        dump("tree-fund-detail-limit.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun holdingSheet() {
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                androidx.compose.material3.Surface(
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerLow
+                ) {
+                    HoldingSheetContent(
+                        state = HoldingSheetState(
+                            open = true,
+                            fundCode = "025833",
+                            fundName = "天弘电网设备特高压指数C",
+                            mode = HoldingMode.BUY,
+                            amount = "2000",
+                            nav = "1.0377",
+                            current = Holding(shares = 12000.0, cost = 11800.0)
+                        ),
+                        onModeChange = {},
+                        onSharesChange = {},
+                        onCostChange = {},
+                        onAmountChange = {},
+                        onNavChange = {},
+                        onFillAll = {},
+                        onSubmit = {}
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+        save("holding-sheet")
+        dump("tree-holding-sheet.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun holdingSheetEdit() {
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                androidx.compose.material3.Surface(
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerLow
+                ) {
+                    HoldingSheetContent(
+                        state = HoldingSheetState(
+                            open = true,
+                            fundCode = "025833",
+                            fundName = "天弘电网设备特高压指数C",
+                            mode = HoldingMode.EDIT,
+                            shares = "12000",
+                            cost = "11800",
+                            current = Holding(shares = 12000.0, cost = 11800.0)
+                        ),
+                        onModeChange = {},
+                        onSharesChange = {},
+                        onCostChange = {},
+                        onAmountChange = {},
+                        onNavChange = {},
+                        onFillAll = {},
+                        onSubmit = {}
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+        save("holding-sheet-edit")
     }
 
     @Test

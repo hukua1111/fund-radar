@@ -73,6 +73,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.LimitChange
+import com.hukua.fundradar.data.amountText
+import com.hukua.fundradar.data.growthText
+import com.hukua.fundradar.data.signedAmountText
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -257,7 +260,8 @@ fun FundRadarContent(
                                 fund = fund,
                                 onClick = { onOpenDetail(fund) },
                                 estimate = state.estimates[fund.code],
-                                showLimitBadge = !portfolio
+                                showLimitBadge = !portfolio,
+                                holding = if (portfolio) state.holdingOf(fund) else null
                             )
                         }
                         item(key = "footer") { Footer() }
@@ -720,6 +724,30 @@ private fun SummaryCard(state: FundUiState) {
                     }
                 }
             }
+            if (state.scope.isPortfolio && state.holdingValue > 0) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "总市值 " + amountText(state.holdingValue) + " 元",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    HoldingMetric(
+                        label = "今日",
+                        value = signedAmountText(state.holdingTodayProfit),
+                        color = growthColor(state.holdingTodayProfit)
+                    )
+                    HoldingMetric(
+                        label = "累计",
+                        value = signedAmountText(state.holdingProfit) +
+                            (state.holdingCost.takeIf { it > 0 }?.let {
+                                "（" + growthText(state.holdingProfit / it * 100) + "）"
+                            } ?: ""),
+                        color = growthColor(state.holdingProfit)
+                    )
+                }
+            }
             Spacer(Modifier.height(3.dp))
             Text(
                 text = buildString {
@@ -740,7 +768,7 @@ private fun SummaryCard(state: FundUiState) {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = state.estimatesError
-                        ?: "按目标 ETF / 重仓股 / 标的指数估算，每分钟自动刷新",
+                        ?: "按目标 ETF / 标的指数 / 重仓股估算，每分钟自动刷新",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (state.estimatesError != null) {
                         MaterialTheme.colorScheme.error
@@ -750,6 +778,24 @@ private fun SummaryCard(state: FundUiState) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun HoldingMetric(label: String, value: String, color: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = color
+        )
     }
 }
 

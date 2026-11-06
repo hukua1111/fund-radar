@@ -186,6 +186,64 @@ class EstimateTest {
         assertNull(PositionApi.parse(body))
     }
 
+    @Test
+    fun trackedIndexBeatsHoldings() {
+        // 指数基金的前十大重仓通常只占四五成，加权会偏小；标的指数才是它复制的东西。
+        val fund = Fund(code = "025833", name = "天弘电网设备特高压指数C", nav = 1.0)
+        val position = FundPosition(
+            stocks = listOf(HoldingStock("600487", "亨通光电", 54.2, 1))
+        )
+        val quotes = mapOf("sh600487" to quote("sh600487", 5.0))
+        val entry = IndexEntry("931994", 2, "电网设备主题")
+
+        val estimate = requireNotNull(
+            estimateFund(fund, position, quotes, entry to quote("2.931994", -1.01))
+        )
+        assertEquals(EstimateSource.INDEX, estimate.source)
+        assertEquals(-1.01, estimate.percent, 1e-9)
+        assertEquals("电网设备主题", estimate.basis)
+    }
+
+    @Test
+    fun etfBeatsTrackedIndex() {
+        // 联接基金先看目标 ETF：那是它真金白银买下的东西。
+        val fund = Fund(code = "008280", name = "国泰中证煤炭ETF联接C", nav = 2.1532)
+        val position = FundPosition(etfCode = "515220", etfName = "煤炭ETF国泰")
+        val quotes = QuoteApi.parseQuotes(quoteLine)
+        val entry = IndexEntry("399998", 0, "中证煤炭")
+
+        val estimate = requireNotNull(
+            estimateFund(fund, position, quotes, entry to quote("sz399998", 9.99))
+        )
+        assertEquals(EstimateSource.ETF, estimate.source)
+        assertEquals(-3.14, estimate.percent, 1e-9)
+    }
+
+    @Test
+    fun indexQuotePayloadParses() {
+        // 东财批量行情：931994 这类中证自有代码只在它这儿有。
+        val body = "" + "\uFEFF" + """
+            {"rc":0,"data":{"total":2,"diff":[
+            {"f2":2417.74,"f3":-1.01,"f12":"931994","f13":2,"f14":"电网设备主题","f124":1793938240},
+            {"f2":4052.48,"f3":-1.48,"f12":"000300","f13":1,"f14":"沪深300","f124":1793938245}]}}
+        """.trimIndent()
+
+        val quotes = com.hukua.fundradar.data.IndexQuoteApi.parse(body)
+        assertEquals(2, quotes.size)
+        val index = requireNotNull(quotes["2.931994"])
+        assertEquals("电网设备主题", index.name)
+        assertEquals(2417.74, index.price, 1e-9)
+        assertEquals(-1.01, index.changePercent, 1e-9)
+        assertTrue(Regex("""\d{2}-\d{2} \d{2}:\d{2}""").matches(index.time))
+        assertTrue(quotes.containsKey("1.000300"))
+    }
+
+    @Test
+    fun indexQuoteSkipsRowsWithoutPrice() {
+        val body = """{"data":{"diff":[{"f2":"-","f3":"-","f12":"931994","f13":2,"f14":"-"}]}}"""
+        assertTrue(com.hukua.fundradar.data.IndexQuoteApi.parse(body).isEmpty())
+    }
+
     private fun quote(symbol: String, percent: Double) = com.hukua.fundradar.data.RealtimeQuote(
         symbol = symbol,
         name = symbol,

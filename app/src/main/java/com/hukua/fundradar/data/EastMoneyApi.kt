@@ -311,12 +311,11 @@ object EastMoneyApi {
         for (fs in CATALOG_FILTERS) {
             var page = 1
             while (page <= 12) {
-                val url = "https://push2.eastmoney.com/api/qt/clist/get" +
+                val path = "/api/qt/clist/get" +
                     "?pn=$page&pz=100&po=1&np=1&fltt=2&invt=2&fid=f12" +
                     "&fs=$fs&fields=f12,f13,f14&_=${System.currentTimeMillis()}"
-                val body = runCatching {
-                    httpGet(url, referer = "https://quote.eastmoney.com/")
-                }.getOrNull() ?: break
+                // push2 的分片主机在不同网络下可用性差别很大，交给 EmQuoteHosts 挑。
+                val body = EmQuoteHosts.get(path) ?: break
                 val diff = runCatching {
                     JSONObject(body).optJSONObject("data")?.optJSONArray("diff")
                 }.getOrNull() ?: break

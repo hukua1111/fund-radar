@@ -19,6 +19,9 @@ import com.hukua.fundradar.data.ChangeKind
 import com.hukua.fundradar.data.Estimate
 import com.hukua.fundradar.data.EstimateSource
 import com.hukua.fundradar.data.Fund
+import com.hukua.fundradar.data.Holding
+import com.hukua.fundradar.data.Trade
+import com.hukua.fundradar.data.TradeKind
 import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.ui.AddFundSheetContent
@@ -243,9 +246,22 @@ class ScreenshotTest {
             watchlistEmpty = false,
             updatedAt = System.currentTimeMillis(),
             estimates = if (scope.isPortfolio) estimates() else emptyMap(),
-            estimatesAt = System.currentTimeMillis()
+            estimatesAt = System.currentTimeMillis(),
+            holdings = if (scope.isPortfolio) holdings() else emptyMap()
         )
     }
+
+    private fun holdings(): Map<String, Holding> = mapOf(
+        "161725" to Holding(
+            shares = 2000.0,
+            cost = 1100.0,
+            trades = listOf(
+                Trade(1L, TradeKind.BUY, 2000.0, 0.55, 1L)
+            )
+        ),
+        "012414" to Holding(shares = 15000.0, cost = 8600.0),
+        "110022" to Holding(shares = 500.0, cost = 1500.0, realized = 120.0)
+    )
 
     private fun estimates(): Map<String, Estimate> = mapOf(
         "161725" to Estimate(

@@ -109,10 +109,6 @@ fun exchangeSymbol(code: String, marketHint: Int = -1): String {
     return market + normalized
 }
 
-/** 指数在腾讯行情里的写法：`sh000932`、`sz399997`。 */
-fun indexQuoteSymbol(entry: IndexEntry): String =
-    (if (entry.market == 1) "sh" else "sz") + entry.code
-
 /**
  * Weighted average move of a set of holdings.
  *
@@ -131,32 +127,47 @@ fun weightedChange(rows: List<Pair<Double, Double>>): Double? {
 /**
  * Builds the estimate for one fund from its position and a batch of quotes.
  *
- * 依次尝试：目标 ETF 的涨跌 → 重仓股加权 → 标的指数涨跌 → 最近公布的净值。
- * 前面几种都拿不到时也一定给出一行数字，界面上不再出现「—」。
+ * 依次尝试：目标 ETF 的涨跌 → 跟踪标的指数的涨跌 → 重仓股加权 → 最近公布的净值。
+ *
+ * 指数的优先级排在重仓股前面：场外指数基金的前十大重仓通常只占四五成，
+ * 加权出来的涨跌会系统性偏小；跟踪标的指数才是它真正复制的东西。重仓股
+ * 留给没有跟踪标的的主动基金，以及指数一时解析不出来的情况。
  */
 fun estimateFund(
     fund: Fund,
     position: FundPosition?,
     quotes: Map<String, RealtimeQuote>,
-    /** 跟踪标的与它的实时行情，作为 ETF / 重仓股都缺位时的兜底。 */
+    /** 跟踪标的与它的实时行情。 */
     index: Pair<IndexEntry, RealtimeQuote>? = null
 ): Estimate? {
-    if (position != null) {
-        val etf = position.etfCode
-            .takeIf { it.isNotBlank() }
-            ?.let { quotes[exchangeSymbol(it)] }
-        if (etf != null) {
-            return Estimate(
-                percent = etf.changePercent,
-                nav = estimatedNav(fund.nav, etf.changePercent),
-                source = EstimateSource.ETF,
-                basis = listOf(position.etfName.ifBlank { etf.name }, position.etfCode)
-                    .filter { it.isNotBlank() }
-                    .joinToString(" "),
-                quoteTime = etf.time
-            )
-        }
+    val etf = position?.etfCode
+        ?.takeIf { it.isNotBlank() }
+        ?.let { quotes[exchangeSymbol(it)] }
+    if (etf != null) {
+        return Estimate(
+            percent = etf.changePercent,
+            nav = estimatedNav(fund.nav, etf.changePercent),
+            source = EstimateSource.ETF,
+            basis = listOf(
+                position.etfName.ifBlank { etf.name },
+                position.etfCode
+            ).filter { it.isNotBlank() }.joinToString(" "),
+            quoteTime = etf.time
+        )
+    }
 
+    if (index != null) {
+        val (entry, quote) = index
+        return Estimate(
+            percent = quote.changePercent,
+            nav = estimatedNav(fund.nav, quote.changePercent),
+            source = EstimateSource.INDEX,
+            basis = entry.name.ifBlank { entry.code },
+            quoteTime = quote.time
+        )
+    }
+
+    if (position != null) {
         val priced = position.stocks.mapNotNull { stock ->
             val quote = quotes[exchangeSymbol(stock.code, stock.market)] ?: return@mapNotNull null
             Triple(stock.weight, quote.changePercent, quote.time)
@@ -175,17 +186,6 @@ fun estimateFund(
                 )
             }
         }
-    }
-
-    if (index != null) {
-        val (entry, quote) = index
-        return Estimate(
-            percent = quote.changePercent,
-            nav = estimatedNav(fund.nav, quote.changePercent),
-            source = EstimateSource.INDEX,
-            basis = entry.name.ifBlank { entry.code },
-            quoteTime = quote.time
-        )
     }
 
     // 最后的兜底：用基金自己最近一次公布的净值涨跌，至少不是空白。
