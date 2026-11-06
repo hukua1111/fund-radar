@@ -32,6 +32,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -42,6 +43,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -78,6 +80,8 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 private val MA_COLORS = listOf(
     Color(0xFFF5A524), // MA5
@@ -100,6 +104,9 @@ fun KlineScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
+    // 再次进入这一页时补一下最新的几根；缓存还新鲜就不会发请求。
+    LaunchedEffect(Unit) { viewModel.load() }
+
     LaunchedEffect(state.verdictError) {
         val message = state.verdictError
         if (message != null) {
@@ -112,7 +119,7 @@ fun KlineScreen(
         state = state,
         snackbarHostState = snackbar,
         onBack = onBack,
-        onRefresh = viewModel::load,
+        onRefresh = { viewModel.load(force = true) },
         onSelectRange = viewModel::setRange,
         onJudge = viewModel::judge,
         onOpenSettings = onOpenSettings
@@ -180,9 +187,9 @@ fun KlineContent(
                 .padding(horizontal = 16.dp)
                 .padding(top = 4.dp, bottom = 28.dp)
         ) {
-            RangeRow(range = state.range, onSelect = onSelectRange)
-            Spacer(Modifier.height(10.dp))
-            ChartCard(state)
+            ChartCard(state = state, onPreset = onSelectRange)
+            Spacer(Modifier.height(8.dp))
+            CacheFooter(state)
             Spacer(Modifier.height(12.dp))
             AiSection(
                 state = state,
@@ -200,25 +207,134 @@ fun KlineContent(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RangeRow(range: Int, onSelect: (Int) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(60, 120, 250).forEach { option ->
-            FilterChip(
-                selected = range == option,
-                onClick = { onSelect(option) },
-                label = { Text("${option}日") },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+private fun WindowPicker(
+    dates: List<String>,
+    start: Int,
+    end: Int,
+    onPreset: (Int?) -> Unit,
+    onRange: (Int, Int) -> Unit
+) {
+    val total = dates.size
+    if (total < 2) return
+    val count = end - start + 1
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PRESET_WINDOWS.forEach { (bars, label) ->
+                val selected = if (bars == null) {
+                    count == total
+                } else {
+                    end == total - 1 && count == min(bars, total)
+                }
+                FilterChip(
+                    selected = selected,
+                    onClick = { onPreset(bars) },
+                    modifier = Modifier.height(30.dp),
+                    label = {
+                        Text(text = label, style = MaterialTheme.typography.labelSmall)
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    border = null
                 )
+            }
+        }
+
+        RangeSlider(
+            value = start.toFloat()..end.toFloat(),
+            onValueChange = { range ->
+                var newStart = range.start.roundToInt().coerceIn(0, total - 1)
+                var newEnd = range.endInclusive.roundToInt().coerceIn(0, total - 1)
+                if (newEnd - newStart < MIN_WINDOW - 1) {
+                    if (newStart != start) {
+                        newStart = (newEnd - MIN_WINDOW + 1).coerceAtLeast(0)
+                    } else {
+                        newEnd = (newStart + MIN_WINDOW - 1).coerceAtMost(total - 1)
+                    }
+                }
+                if (newEnd > newStart) onRange(newStart, newEnd)
+            },
+            valueRange = 0f..(total - 1).toFloat()
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = dates[start].takeLast(5) + " → " + dates[end].takeLast(5),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "$count 个交易日",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
             )
         }
     }
 }
 
+/** 本地缓存状态：一眼看出这次是补了几根还是读了磁盘。 */
 @Composable
-private fun ChartCard(state: KlineUiState) {
+private fun CacheFooter(state: KlineUiState) {
+    val series = state.series ?: return
+    val bars = max(state.bars, series.candles.size)
+    val time = if (state.fetchedAt > 0) {
+        SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(state.fetchedAt))
+    } else {
+        ""
+    }
+    val text = buildString {
+        append(if (state.fromCache) "本地缓存" else "已更新")
+        append(" · ")
+        append(bars)
+        append(" 根日K")
+        if (state.added > 0) {
+            append(" · 本次新增 ")
+            append(state.added)
+            append(" 根")
+        }
+        if (time.isNotBlank()) {
+            append(" · ")
+            append(time)
+        }
+        append(" · 之后只拉最新 5 根")
+    }
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    val error = state.error
+    if (error != null) {
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = error,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.error
+        )
+    }
+}
+
+/** 快捷时间跨度：根数与标题。null 表示全部。 */
+private val PRESET_WINDOWS = listOf(
+    20 to "1月",
+    60 to "3月",
+    120 to "6月",
+    250 to "1年",
+    null to "全部"
+)
+
+/** 最少显示这么多根，避免滑块缩成一个点。 */
+private const val MIN_WINDOW = 12
+
+@Composable
+private fun ChartCard(state: KlineUiState, onPreset: (Int) -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -256,24 +372,54 @@ private fun ChartCard(state: KlineUiState) {
                 }
 
                 else -> {
-                    val visible = series.candles.takeLast(state.range)
-                    val offset = series.candles.size - visible.size
-                    val maValues = KlineSeries.MA_PERIODS.associateWith { period ->
-                        series.ma(period).drop(offset)
+                    val total = series.candles.size
+                    var startBar by rememberSaveable(series.code) { mutableIntStateOf(0) }
+                    var endBar by rememberSaveable(series.code) { mutableIntStateOf(0) }
+                    var initialized by rememberSaveable(series.code) { mutableStateOf(false) }
+                    var followEnd by rememberSaveable(series.code) { mutableStateOf(true) }
+
+                    // 首次进来按默认视窗（最新 N 根）；之后增量补了新数据，
+                    // 只要右滑块还贴在末尾就跟着一起走。
+                    LaunchedEffect(total) {
+                        if (total <= 0) return@LaunchedEffect
+                        if (!initialized) {
+                            startBar = (total - min(state.range, total)).coerceAtLeast(0)
+                            endBar = total - 1
+                            initialized = true
+                        } else if (followEnd) {
+                            endBar = total - 1
+                            if (startBar > endBar) startBar = 0
+                        }
                     }
+
+                    val start = startBar.coerceIn(0, max(0, total - 1))
+                    val end = endBar.coerceIn(start, max(0, total - 1))
+                    val visible = series.candles.subList(start, end + 1)
+                    val offset = start
+
+                    // 均线与布林带都在完整历史上算好，再切视窗——否则左边缘
+                    // 会是一段空白。
+                    val allMa = remember(series) {
+                        KlineSeries.MA_PERIODS.associateWith { period -> series.ma(period) }
+                    }
+                    val allBoll = remember(series) { series.boll() }
+
                     val lines = KlineSeries.MA_PERIODS.mapIndexed { index, period ->
-                        MaLine(period, MA_COLORS[index % MA_COLORS.size], maValues[period].orEmpty())
+                        MaLine(
+                            period = period,
+                            color = MA_COLORS[index % MA_COLORS.size],
+                            values = allMa.getValue(period).drop(offset).take(visible.size)
+                        )
                     }
-                    val rawBoll = series.boll()
                     val boll = BollingerBands(
-                        period = rawBoll.period,
-                        multiplier = rawBoll.multiplier,
-                        middle = rawBoll.middle.drop(offset),
-                        upper = rawBoll.upper.drop(offset),
-                        lower = rawBoll.lower.drop(offset)
+                        period = allBoll.period,
+                        multiplier = allBoll.multiplier,
+                        middle = allBoll.middle.drop(offset).take(visible.size),
+                        upper = allBoll.upper.drop(offset).take(visible.size),
+                        lower = allBoll.lower.drop(offset).take(visible.size)
                     )
 
-                    var selected by remember(state.range, series.code, visible.size) {
+                    var selected by remember(series.code, start, end) {
                         mutableStateOf<Int?>(null)
                     }
                     var showMa by rememberSaveable { mutableStateOf(true) }
@@ -304,10 +450,28 @@ private fun ChartCard(state: KlineUiState) {
                             .fillMaxWidth()
                             .height(340.dp)
                     )
+                    Spacer(Modifier.height(2.dp))
+                    WindowPicker(
+                        dates = series.candles.map { it.date },
+                        start = start,
+                        end = end,
+                        onPreset = { bars ->
+                            val length = if (bars == null) total else min(bars, total)
+                            startBar = (total - length).coerceAtLeast(0)
+                            endBar = total - 1
+                            followEnd = true
+                            onPreset(bars ?: total)
+                        },
+                        onRange = { newStart, newEnd ->
+                            startBar = newStart
+                            endBar = newEnd
+                            followEnd = newEnd >= total - 1
+                        }
+                    )
                     Spacer(Modifier.height(8.dp))
                     IndicatorLegend(
                         maValues = KlineSeries.MA_PERIODS.associateWith { period ->
-                            maValues[period]?.getOrNull(focus)
+                            allMa.getValue(period).getOrNull(offset + focus)
                         },
                         boll = if (showBoll) boll else null,
                         focus = focus,

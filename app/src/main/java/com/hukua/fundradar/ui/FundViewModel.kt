@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.hukua.fundradar.data.Estimate
+import com.hukua.fundradar.data.EstimateBatch
 import com.hukua.fundradar.data.EstimateRepository
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundExtra
@@ -16,6 +17,7 @@ import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.IndexRepository
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.data.LimitType
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class FundFilter(val label: String) {
     ALL("全部"),
@@ -56,6 +59,8 @@ data class FundUiState(
     val estimates: Map<String, Estimate> = emptyMap(),
     val estimatesLoading: Boolean = false,
     val estimatesAt: Long = 0L,
+    /** 行情源整体不可用时给用户一句解释。 */
+    val estimatesError: String? = null,
     /** 用户手动指定的「基金 → 指数」，覆盖按名字自动匹配。 */
     val overrides: Map<String, IndexEntry> = emptyMap()
 ) {
@@ -64,7 +69,7 @@ data class FundUiState(
     val openCount: Int get() = all.count { it.limitType == LimitType.OPEN }
 
     /** Funds with a usable estimate, and how many of those are ETF based. */
-    val estimatedCount: Int get() = all.count { estimates.containsKey(it.code) }
+    val estimatedCount: Int get() = all.count { estimates[it.code]?.isRealtime == true }
     val etfCount: Int get() = estimates.values.count { it.source == com.hukua.fundradar.data.EstimateSource.ETF }
 
     fun derive(): FundUiState = copy(visible = all.filter { filter.matches(it) })
@@ -132,6 +137,7 @@ class FundViewModel(
     private var trackJob: Job? = null
     private var searchSeq = 0
     private var trackSeq = 0
+    private var proxyCache: Pair<Long, Map<String, IndexEntry>>? = null
 
     init {
         load(force = false)
@@ -231,16 +237,31 @@ class FundViewModel(
         estimateJob?.cancel()
         _state.update { it.copy(estimatesLoading = true) }
         estimateJob = viewModelScope.launch {
-            val estimates = runCatching { estimateRepository.estimates(funds) }
-                .getOrDefault(emptyMap())
+            val proxies = withContext(Dispatchers.IO) { proxies() }
+            val batch = runCatching { estimateRepository.estimates(funds, proxies) }
+                .getOrElse { EstimateBatch(error = it.message ?: "估算失败") }
             _state.update {
                 it.copy(
-                    estimates = estimates,
+                    estimates = batch.estimates,
+                    estimatesError = batch.error,
                     estimatesLoading = false,
-                    estimatesAt = System.currentTimeMillis()
+                    estimatesAt = batch.at.takeIf { at -> at > 0 } ?: System.currentTimeMillis()
                 )
             }
         }
+    }
+
+    /**
+     * 基金 → 标的指数。解析要读目录、偶尔还要联网，十分钟内复用一份，
+     * 免得每分钟的估值刷新都去重算一遍。
+     */
+    private suspend fun proxies(): Map<String, IndexEntry> {
+        val cached = proxyCache
+        val now = System.currentTimeMillis()
+        if (cached != null && now - cached.first < PROXY_TTL_MS) return cached.second
+        val fresh = indexRepository.fundProxies()
+        proxyCache = now to fresh
+        return fresh
     }
 
     // ---------------------------------------------------------- detail
@@ -300,12 +321,14 @@ class FundViewModel(
         val target = _trackPicker.value
         if (target.fundCode.isBlank()) return
         indexRepository.assignTrack(target.fundCode, entry)
+        proxyCache = null
         _state.update { it.copy(overrides = indexRepository.trackOverrides()) }
         closeTrackPicker()
     }
 
     fun clearTrack(fundCode: String) {
         indexRepository.clearTrack(fundCode)
+        proxyCache = null
         _state.update { it.copy(overrides = indexRepository.trackOverrides()) }
     }
 
@@ -360,6 +383,9 @@ class FundViewModel(
     }
 
     companion object {
+        /** 基金 → 指数的映射缓存十分钟，够覆盖几次估值刷新。 */
+        private const val PROXY_TTL_MS = 10 * 60 * 1000L
+
         fun factory(context: Context, scope: FundScope): ViewModelProvider.Factory =
             viewModelFactory {
                 initializer {

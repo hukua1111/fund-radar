@@ -8,7 +8,13 @@ enum class EstimateSource {
     ETF,
 
     /** Weighted move of the fund's top holdings, for funds without an ETF. */
-    HOLDINGS
+    HOLDINGS,
+
+    /** 有跟踪标的但拿不到持仓时，用标的指数的实时涨跌代替。 */
+    INDEX,
+
+    /** 什么都取不到时退回最近一次公布的净值涨跌（非实时）。 */
+    NAV
 }
 
 /**
@@ -38,7 +44,15 @@ data class Estimate(
         get() = when (source) {
             EstimateSource.ETF -> "按目标 ETF 估算"
             EstimateSource.HOLDINGS -> "按重仓股估算"
+            EstimateSource.INDEX -> "按标的指数估算"
+            EstimateSource.NAV -> "最近公布净值"
         }
+
+    /** 卡片上的小标题：真·盘中估算才叫「估算涨跌」。 */
+    val valueLabel: String
+        get() = if (source == EstimateSource.NAV) "净值涨跌" else "估算涨跌"
+
+    val isRealtime: Boolean get() = source != EstimateSource.NAV
 
     /** One-line footnote under the card. */
     val footnote: String
@@ -57,25 +71,35 @@ data class Estimate(
                 append(" · ")
                 append(quoteTime)
             }
+            if (!isRealtime) {
+                append("（非实时）")
+            }
         }
 }
 
 /**
- * Exchange symbol for a quote request: `sh515220`, `sz159819`.
+ * Exchange symbol for a quote request: `sh515220`, `sz159819`, `hk00700`.
  *
- * [marketHint] comes from the position feed (1 = 上海, 0 = 深圳) and wins when
- * present, because stock codes alone cannot tell 北交所 from 深市.
+ * [marketHint] comes from the position feed (0 = 深圳, 1 = 上海, 116 = 港股,
+ * 105/106/107 = 美股). Stock codes alone cannot tell 北交所 from 深市, nor
+ * 港股 from 深市 — `00700` and `000700` both look like six/five digit numbers.
  */
 fun exchangeSymbol(code: String, marketHint: Int = -1): String {
     val normalized = code.trim()
     if (normalized.isEmpty()) return ""
-    if (normalized.startsWith("sh") || normalized.startsWith("sz") || normalized.startsWith("bj")) {
+    if (normalized.startsWith("sh") || normalized.startsWith("sz") ||
+        normalized.startsWith("bj") || normalized.startsWith("hk") ||
+        normalized.startsWith("us")
+    ) {
         return normalized
     }
     val market = when (marketHint) {
         0 -> "sz"
         1 -> "sh"
+        116 -> "hk"
+        105, 106, 107 -> "us"
         else -> when {
+            normalized.length == 5 && normalized.all { it.isDigit() } -> "hk"
             normalized.startsWith("5") || normalized.startsWith("6") ||
                 normalized.startsWith("9") -> "sh"
             normalized.startsWith("4") || normalized.startsWith("8") -> "bj"
@@ -84,6 +108,10 @@ fun exchangeSymbol(code: String, marketHint: Int = -1): String {
     }
     return market + normalized
 }
+
+/** 指数在腾讯行情里的写法：`sh000932`、`sz399997`。 */
+fun indexQuoteSymbol(entry: IndexEntry): String =
+    (if (entry.market == 1) "sh" else "sz") + entry.code
 
 /**
  * Weighted average move of a set of holdings.
@@ -103,46 +131,74 @@ fun weightedChange(rows: List<Pair<Double, Double>>): Double? {
 /**
  * Builds the estimate for one fund from its position and a batch of quotes.
  *
- * Feeder funds win with the ETF's own move; a fund without an ETF falls back
- * to the weighted move of whatever holdings could be priced.
+ * 依次尝试：目标 ETF 的涨跌 → 重仓股加权 → 标的指数涨跌 → 最近公布的净值。
+ * 前面几种都拿不到时也一定给出一行数字，界面上不再出现「—」。
  */
 fun estimateFund(
     fund: Fund,
-    position: FundPosition,
-    quotes: Map<String, RealtimeQuote>
+    position: FundPosition?,
+    quotes: Map<String, RealtimeQuote>,
+    /** 跟踪标的与它的实时行情，作为 ETF / 重仓股都缺位时的兜底。 */
+    index: Pair<IndexEntry, RealtimeQuote>? = null
 ): Estimate? {
-    val etf = position.etfCode
-        .takeIf { it.isNotBlank() }
-        ?.let { quotes[exchangeSymbol(it)] }
-    if (etf != null) {
+    if (position != null) {
+        val etf = position.etfCode
+            .takeIf { it.isNotBlank() }
+            ?.let { quotes[exchangeSymbol(it)] }
+        if (etf != null) {
+            return Estimate(
+                percent = etf.changePercent,
+                nav = estimatedNav(fund.nav, etf.changePercent),
+                source = EstimateSource.ETF,
+                basis = listOf(position.etfName.ifBlank { etf.name }, position.etfCode)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" "),
+                quoteTime = etf.time
+            )
+        }
+
+        val priced = position.stocks.mapNotNull { stock ->
+            val quote = quotes[exchangeSymbol(stock.code, stock.market)] ?: return@mapNotNull null
+            Triple(stock.weight, quote.changePercent, quote.time)
+        }
+        if (priced.isNotEmpty()) {
+            val percent = weightedChange(priced.map { it.first to it.second })
+            if (percent != null) {
+                val times = priced.map { it.third }.filter { it.isNotBlank() }.distinct()
+                return Estimate(
+                    percent = percent,
+                    nav = estimatedNav(fund.nav, percent),
+                    source = EstimateSource.HOLDINGS,
+                    basis = "${priced.size} 只重仓股",
+                    quoteTime = if (times.size == 1) times.first() else "盘中",
+                    coverage = priced.sumOf { it.first }
+                )
+            }
+        }
+    }
+
+    if (index != null) {
+        val (entry, quote) = index
         return Estimate(
-            percent = etf.changePercent,
-            nav = estimatedNav(fund.nav, etf.changePercent),
-            source = EstimateSource.ETF,
-            basis = listOf(position.etfName.ifBlank { etf.name }, position.etfCode)
-                .filter { it.isNotBlank() }
-                .joinToString(" "),
-            quoteTime = etf.time
+            percent = quote.changePercent,
+            nav = estimatedNav(fund.nav, quote.changePercent),
+            source = EstimateSource.INDEX,
+            basis = entry.name.ifBlank { entry.code },
+            quoteTime = quote.time
         )
     }
 
-    val priced = position.stocks.mapNotNull { stock ->
-        val quote = quotes[exchangeSymbol(stock.code, stock.market)] ?: return@mapNotNull null
-        Triple(stock.weight, quote.changePercent, quote.time)
+    // 最后的兜底：用基金自己最近一次公布的净值涨跌，至少不是空白。
+    if (fund.nav > 0) {
+        return Estimate(
+            percent = fund.dayGrowth,
+            nav = fund.nav,
+            source = EstimateSource.NAV,
+            basis = "",
+            quoteTime = fund.navDate
+        )
     }
-    if (priced.isEmpty()) return null
-
-    val percent = weightedChange(priced.map { it.first to it.second }) ?: return null
-    val times = priced.map { it.third }.filter { it.isNotBlank() }.distinct()
-
-    return Estimate(
-        percent = percent,
-        nav = estimatedNav(fund.nav, percent),
-        source = EstimateSource.HOLDINGS,
-        basis = "${priced.size} 只重仓股",
-        quoteTime = if (times.size == 1) times.first() else "盘中",
-        coverage = priced.sumOf { it.first }
-    )
+    return null
 }
 
 private fun estimatedNav(nav: Double, percent: Double): Double? =

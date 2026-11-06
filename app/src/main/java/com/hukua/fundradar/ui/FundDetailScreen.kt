@@ -178,10 +178,10 @@ fun FundDetailScreen(
             }
 
             if (estimate != null) {
-                SectionTitle("今日估算")
+                SectionTitle(if (estimate.isRealtime) "今日估算" else "最新净值")
                 DetailCard {
                     DetailRow(
-                        "估算涨跌",
+                        estimate.valueLabel,
                         growthText(estimate.percent),
                         valueColor = growthColor(estimate.percent)
                     )

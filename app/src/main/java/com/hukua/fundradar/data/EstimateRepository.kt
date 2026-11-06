@@ -13,13 +13,24 @@ import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** 一次估算的结果：每只基金一条，外加整体性的错误说明。 */
+data class EstimateBatch(
+    val estimates: Map<String, Estimate> = emptyMap(),
+    /** 行情源整体不可用时的说明，用来在界面上给一句解释。 */
+    val error: String? = null,
+    val at: Long = 0L
+)
+
 /**
  * Turns "what does this fund hold" into "how much is it up today".
  *
  * The chain is: [PositionApi] for the holdings (cached for a week, they only
  * change quarterly) → [QuoteApi] for one batched quote request → a weighted
  * change. Feeder funds use the ETF's own move; everything else falls back to
- * the weighted move of its top ten stocks.
+ * the weighted move of its top ten stocks, then to its tracked index, and
+ * finally to the last published NAV change.
+ *
+ * 天天基金自己的盘中估值接口已被叫停，所以这里全部靠交易所的实时行情自己算。
  */
 class EstimateRepository(context: Context) {
 
@@ -27,8 +38,12 @@ class EstimateRepository(context: Context) {
     private val cacheFile = File(appContext.filesDir, "fund_position_cache.json")
     private val positions: MutableMap<String, CachedPosition> by lazy { readCache() }
 
-    suspend fun estimates(funds: List<Fund>): Map<String, Estimate> = withContext(Dispatchers.IO) {
-        if (funds.isEmpty()) return@withContext emptyMap()
+    suspend fun estimates(
+        funds: List<Fund>,
+        /** 基金代码 → 标的指数，拿不到持仓时用它兜底。 */
+        proxies: Map<String, IndexEntry> = emptyMap()
+    ): EstimateBatch = withContext(Dispatchers.IO) {
+        if (funds.isEmpty()) return@withContext EstimateBatch(at = System.currentTimeMillis())
         val now = System.currentTimeMillis()
         val semaphore = Semaphore(3)
         val dirty = AtomicBoolean(false)
@@ -64,19 +79,26 @@ class EstimateRepository(context: Context) {
         if (dirty.get()) writeCache()
 
         val symbols = LinkedHashSet<String>()
-        resolved.forEach { (_, position) ->
+        resolved.forEach { (fund, position) ->
             position?.etfCode?.takeIf { it.isNotBlank() }?.let { symbols += exchangeSymbol(it) }
             position?.stocks?.forEach { symbols += exchangeSymbol(it.code, it.market) }
+            proxies[fund.code]?.let { symbols += indexQuoteSymbol(it) }
         }
-        if (symbols.isEmpty()) return@withContext emptyMap()
+        if (symbols.isEmpty()) {
+            return@withContext EstimateBatch(error = "没有可用的持仓或指数数据", at = now)
+        }
+
         val quotes = QuoteApi.fetch(symbols)
+        val error = if (quotes.isEmpty()) "行情源暂时没有响应，稍后会自动重试" else null
 
         val result = LinkedHashMap<String, Estimate>()
         resolved.forEach { (fund, position) ->
-            if (position == null) return@forEach
-            estimateFund(fund, position, quotes)?.let { result[fund.code] = it }
+            val proxy = proxies[fund.code]?.let { entry ->
+                quotes[indexQuoteSymbol(entry)]?.let { entry to it }
+            }
+            estimateFund(fund, position, quotes, proxy)?.let { result[fund.code] = it }
         }
-        result
+        EstimateBatch(estimates = result, error = error, at = now)
     }
 
     // ------------------------------------------------------------ cache

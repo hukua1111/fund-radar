@@ -24,22 +24,31 @@ object QuoteApi {
     /** Quotes per request; keeps the URL short and the reply easy to parse. */
     private const val BATCH = 40
 
+    private const val REFERER = "https://gu.qq.com/"
+    private val GBK = charset("GBK")
+
     suspend fun fetch(symbols: Collection<String>): Map<String, RealtimeQuote> {
         val cleaned = symbols.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         if (cleaned.isEmpty()) return emptyMap()
 
         val result = LinkedHashMap<String, RealtimeQuote>()
         cleaned.chunked(BATCH).forEach { chunk ->
-            val body = runCatching {
-                Net.get(
-                    url = "https://qt.gtimg.cn/q=" + chunk.joinToString(","),
-                    referer = "https://gu.qq.com/",
-                    charset = charset("GBK")
-                )
-            }.getOrNull() ?: return@forEach
+            val body = fetchChunk(chunk) ?: return@forEach
             result.putAll(parseQuotes(body))
         }
         return result
+    }
+
+    /** 先走 HTTPS；个别网络环境会拦掉，退回 HTTP 再来一次。 */
+    private suspend fun fetchChunk(chunk: List<String>): String? {
+        val path = "q=" + chunk.joinToString(",")
+        val https = runCatching {
+            Net.get("https://qt.gtimg.cn/$path", referer = REFERER, charset = GBK)
+        }.getOrNull()
+        if (!https.isNullOrBlank()) return https
+        return runCatching {
+            Net.get("http://qt.gtimg.cn/$path", referer = REFERER, charset = GBK)
+        }.getOrNull()
     }
 
     /**
@@ -53,7 +62,7 @@ object QuoteApi {
      */
     internal fun parseQuotes(body: String): Map<String, RealtimeQuote> {
         val result = LinkedHashMap<String, RealtimeQuote>()
-        Regex("""v_([a-z]{2}\d{6})="([^"]*)"""").findAll(body).forEach { match ->
+        Regex("""v_([a-z]{2}[A-Za-z0-9.]+)="([^"]*)"""").findAll(body).forEach { match ->
             val symbol = match.groupValues[1]
             val parts = match.groupValues[2].split('~')
             if (parts.size < 33) return@forEach
@@ -77,17 +86,28 @@ object QuoteApi {
         return result
     }
 
-    /** `20261105161438` → `11-05 16:14`; anything unexpected is passed through. */
+    /** `20261105161438` → `11-05 16:14`; 港股是 `2026/11/06 11:04:37`。 */
     private fun timeText(raw: String): String {
-        val digits = raw.trim()
-        if (digits.length < 12 || digits.any { !it.isDigit() }) return digits
+        val text = raw.trim()
+        if (text.length >= 12 && text.all { it.isDigit() }) {
+            return String.format(
+                Locale.US,
+                "%s-%s %s:%s",
+                text.substring(4, 6),
+                text.substring(6, 8),
+                text.substring(8, 10),
+                text.substring(10, 12)
+            )
+        }
+        val match = Regex("""\d{4}[/-](\d{2})[/-](\d{2})[ T](\d{2}):(\d{2})""").find(text)
+            ?: return text
         return String.format(
             Locale.US,
             "%s-%s %s:%s",
-            digits.substring(4, 6),
-            digits.substring(6, 8),
-            digits.substring(8, 10),
-            digits.substring(10, 12)
+            match.groupValues[1],
+            match.groupValues[2],
+            match.groupValues[3],
+            match.groupValues[4]
         )
     }
 }

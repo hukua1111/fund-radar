@@ -339,6 +339,10 @@ class FeatureScreenshotTest {
         range = 120,
         loading = false,
         series = sampleSeries(),
+        fromCache = true,
+        bars = 160,
+        added = 1,
+        fetchedAt = System.currentTimeMillis(),
         verdict = verdict,
         aiConfigured = aiConfigured
     )

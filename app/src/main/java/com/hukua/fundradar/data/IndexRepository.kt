@@ -131,6 +131,20 @@ class IndexRepository(context: Context) {
 
     fun removeIndex(secid: String) = manual.remove(secid)
 
+    /**
+     * 「基金代码 → 标的指数」，给盘中估算兜底用。
+     *
+     * 联接基金的持仓里有 ETF、普通指数基金有十大重仓，但总有拿不到的时候
+     * （债基、QDII、刚成立的新基金）。这时标的指数的实时涨跌就是最好的近似。
+     */
+    suspend fun fundProxies(): Map<String, IndexEntry> = withContext(Dispatchers.IO) {
+        val result = LinkedHashMap<String, IndexEntry>()
+        runCatching { tracked() }.getOrNull()?.items?.forEach { item ->
+            item.fundCodes.forEach { code -> result.putIfAbsent(code, item.entry) }
+        }
+        result
+    }
+
     // ------------------------------------------------ 跟踪标的手动指定
 
     /** 所有手动指定的「基金 → 指数」。 */

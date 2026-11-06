@@ -269,6 +269,20 @@ class ScreenshotTest {
             basis = "10 只重仓股",
             quoteTime = "11-05 15:00",
             coverage = 62.4
+        ),
+        "000001" to Estimate(
+            percent = -5.06,
+            nav = 0.9190,
+            source = EstimateSource.NAV,
+            basis = "",
+            quoteTime = "10-30"
+        ),
+        "009941" to Estimate(
+            percent = 0.64,
+            nav = 0.4572,
+            source = EstimateSource.INDEX,
+            basis = "中证白酒",
+            quoteTime = "11-05 15:00"
         )
     )
 }

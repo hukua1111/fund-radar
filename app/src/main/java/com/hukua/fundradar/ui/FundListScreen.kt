@@ -739,9 +739,14 @@ private fun SummaryCard(state: FundUiState) {
             if (state.scope.isPortfolio) {
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = "联接基金按目标 ETF 估算，其余按重仓股加权，仅供参考",
+                    text = state.estimatesError
+                        ?: "按目标 ETF / 重仓股 / 标的指数估算，每分钟自动刷新",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                    color = if (state.estimatesError != null) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                    }
                 )
             }
         }

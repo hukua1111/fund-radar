@@ -36,8 +36,12 @@ object PositionApi {
             "?FCODE=%s&deviceid=1&plat=Android&product=EFund&version=6.2.8"
 
     suspend fun fetch(code: String): FundPosition? {
+        val url = URL.format(code)
         val body = runCatching {
-            Net.get(URL.format(code), referer = "https://fund.eastmoney.com/")
+            Net.get(url, referer = "https://fund.eastmoney.com/")
+        }.getOrNull() ?: runCatching {
+            // 个别网络会拦 HTTPS，退回 HTTP 再试一次。
+            Net.get(url.replaceFirst("https://", "http://"), referer = "https://fund.eastmoney.com/")
         }.getOrNull() ?: return null
         return parse(body)
     }

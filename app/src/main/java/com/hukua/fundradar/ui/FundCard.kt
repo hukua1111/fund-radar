@@ -116,7 +116,7 @@ fun FundCard(
                     )
                 } else {
                     ValueCell(
-                        label = "估算涨跌",
+                        label = estimate?.valueLabel ?: "估算涨跌",
                         value = estimate?.let { growthText(it.percent) } ?: "—",
                         valueColor = estimate?.let { growthColor(it.percent) }
                             ?: MaterialTheme.colorScheme.onSurfaceVariant,
@@ -133,7 +133,7 @@ fun FundCard(
             if (!showLimitBadge) {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = estimate?.footnote ?: "暂无实时行情，显示最近一次公布净值",
+                    text = estimate?.footnote ?: "正在获取行情…",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

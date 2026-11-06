@@ -4,6 +4,7 @@ import com.hukua.fundradar.data.EstimateSource
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundPosition
 import com.hukua.fundradar.data.HoldingStock
+import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.PositionApi
 import com.hukua.fundradar.data.QuoteApi
 import com.hukua.fundradar.data.estimateFund
@@ -104,6 +105,64 @@ class EstimateTest {
         val position = FundPosition(stocks = listOf(HoldingStock("600487", "亨通光电", 9.0, 1)))
         assertNull(estimateFund(fund, position, emptyMap()))
         assertNull(estimateFund(fund, FundPosition(), emptyMap()))
+    }
+
+    @Test
+    fun hongKongHoldingsUseHkSymbol() {
+        // 00700 是腾讯（港股），000700 是 A 股；只靠代码前缀会把港股错当成深市。
+        assertEquals("hk00700", exchangeSymbol("00700", marketHint = 116))
+        assertEquals("hk09988", exchangeSymbol("09988", marketHint = 116))
+        assertEquals("hk00700", exchangeSymbol("00700"))
+        assertEquals("sz000700", exchangeSymbol("000700"))
+    }
+
+    @Test
+    fun fundWithoutHoldingsFallsBackToItsIndex() {
+        val fund = Fund(code = "012414", name = "招商中证白酒指数C", nav = 0.5895)
+        val entry = IndexEntry("399997", 0, "中证白酒")
+        val estimate = requireNotNull(
+            estimateFund(fund, null, emptyMap(), entry to quote("sz399997", 1.26))
+        )
+        assertEquals(EstimateSource.INDEX, estimate.source)
+        assertEquals(1.26, estimate.percent, 1e-9)
+        assertEquals("中证白酒", estimate.basis)
+        assertEquals("估算涨跌", estimate.valueLabel)
+    }
+
+    @Test
+    fun nothingPricedFallsBackToLastNav() {
+        val fund = Fund(
+            code = "000001",
+            name = "华夏成长混合",
+            nav = 1.0,
+            dayGrowth = 1.42,
+            navDate = "11-05"
+        )
+        val estimate = requireNotNull(estimateFund(fund, FundPosition(), emptyMap()))
+        assertEquals(EstimateSource.NAV, estimate.source)
+        assertEquals(1.42, estimate.percent, 1e-9)
+        assertEquals("净值涨跌", estimate.valueLabel)
+        assertTrue(estimate.footnote.contains("非实时"))
+    }
+
+    @Test
+    fun hongKongQuoteParses() {
+        val parts = MutableList(34) { "0" }
+        parts[0] = "100"
+        parts[1] = "腾讯控股"
+        parts[2] = "00700"
+        parts[3] = "427.200"
+        parts[4] = "430.400"
+        parts[30] = "2026/11/06 11:04:37"
+        parts[31] = "-3.200"
+        parts[32] = "-0.74"
+        val line = "v_hk00700=\"" + parts.joinToString("~") + "\";"
+
+        val quote = requireNotNull(QuoteApi.parseQuotes(line)["hk00700"])
+        assertEquals("腾讯控股", quote.name)
+        assertEquals(427.2, quote.price, 1e-9)
+        assertEquals(-0.74, quote.changePercent, 1e-9)
+        assertEquals("11-06 11:04", quote.time)
     }
 
     @Test

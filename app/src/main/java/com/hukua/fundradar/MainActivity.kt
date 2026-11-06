@@ -11,11 +11,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.SettingsStore
+import com.hukua.fundradar.data.isTradingTime
 import com.hukua.fundradar.ui.AppBottomBar
 import com.hukua.fundradar.ui.FundDetailScreen
 import com.hukua.fundradar.ui.FundRadarScreen
@@ -31,6 +35,7 @@ import com.hukua.fundradar.ui.TAB_PORTFOLIO
 import com.hukua.fundradar.ui.TrackIndexSheet
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import com.hukua.fundradar.work.DailyScheduler
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
@@ -100,12 +105,20 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // Index quotes and intraday estimates move all session; refresh
-                // them whenever their tab comes back into view.
-                LaunchedEffect(tab, route) {
+                // them whenever their tab comes back into view, and keep the
+                // portfolio estimates ticking while the screen is actually in
+                // front of the user (stopped when it is not).
+                val lifecycle = LocalLifecycleOwner.current.lifecycle
+                LaunchedEffect(tab, route, lifecycle) {
                     if (route != "list") return@LaunchedEffect
                     when (tab) {
                         TAB_INDEX -> indexViewModel.load()
-                        TAB_PORTFOLIO -> portfolioViewModel.refreshEstimates()
+                        TAB_PORTFOLIO -> lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                            while (true) {
+                                portfolioViewModel.refreshEstimates()
+                                delay(if (isTradingTime()) 60_000L else 5 * 60_000L)
+                            }
+                        }
                     }
                 }
 
