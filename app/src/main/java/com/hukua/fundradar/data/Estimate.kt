@@ -4,14 +4,22 @@ import java.util.Locale
 
 /** Where an intraday estimate comes from. */
 enum class EstimateSource {
-    /** The ETF a feeder fund holds — the most direct read of today's move. */
+    /**
+     * 基金跟踪的标的指数 —— 默认口径。
+     *
+     * 场外基金按指数成分与权重复制组合，扣费与现金留存带来的偏差每天都
+     * 会被净值消化；反而 ETF 的场内价格还夹着溢价/折价，用 ETF 估净值会
+     * 多一层噪声。用户拿一年数据回测也确认指数更贴净值，所以指数优先。
+     */
+    INDEX,
+
+    /**
+     * 目标 ETF 的场内涨跌 —— 指数识别不出来时的第一备选。
+     */
     ETF,
 
-    /** Weighted move of the fund's top holdings, for funds without an ETF. */
+    /** Weighted move of the fund's top holdings, for funds without an index. */
     HOLDINGS,
-
-    /** 有跟踪标的但拿不到持仓时，用标的指数的实时涨跌代替。 */
-    INDEX,
 
     /** 什么都取不到时退回最近一次公布的净值涨跌（非实时）。 */
     NAV
@@ -20,12 +28,12 @@ enum class EstimateSource {
 /**
  * Intraday estimate for a fund.
  *
- * A feeder fund (ETF 联接) publishes only one NAV per day, but the ETF it holds
- * trades all session, so the ETF's change is a good stand-in for the fund's.
- * For direct index funds there is no ETF, so the top holdings are weighted by
- * their published share of the portfolio instead.
+ * 场外基金一天只公布一个净值，估值的办法是找一个「盘中会动、又和它同源」的
+ * 东西。按贴合程度排序：跟踪标的指数 → 目标 ETF → 前十大重仓股 → 最近净值。
  *
- * Everything here is an estimate, never a quote of the fund itself.
+ * 指数排第一：场外基金就是照着指数复制组合的，长期看净值与指数的偏离只在
+ * 费率量级；ETF 的场内价格还含溢价/折价，日内波动比净值多一层噪声。
+ * 目标 ETF 只在指数识别不出来（名称对不上、目录里没有）时兜底。
  */
 data class Estimate(
     /** Estimated change in percent, e.g. -3.14. */
@@ -38,15 +46,26 @@ data class Estimate(
     /** Quote timestamp from the exchange, already formatted as `11-05 16:14`. */
     val quoteTime: String = "",
     /** Share of the portfolio covered by the weighted holdings, in percent. */
-    val coverage: Double = 0.0
+    val coverage: Double = 0.0,
+    /** 这只基金联接的目标 ETF（没有则为空），用来在界面上说清楚估值到底按谁算。 */
+    val etfCode: String = "",
+    val etfName: String = "",
+    /** 目标 ETF 当日的涨跌，指数口径下作对照用；没有行情则为 null。 */
+    val etfPercent: Double? = null,
+    /** 降级原因，例如「目标 ETF 行情暂缺」。 */
+    val note: String = ""
 ) {
     val sourceLabel: String
         get() = when (source) {
+            EstimateSource.INDEX -> "按跟踪指数估算"
             EstimateSource.ETF -> "按目标 ETF 估算"
             EstimateSource.HOLDINGS -> "按重仓股估算"
-            EstimateSource.INDEX -> "按标的指数估算"
             EstimateSource.NAV -> "最近公布净值"
         }
+
+    /** 目标 ETF 的展示名，例如「煤炭ETF国泰 515220」。 */
+    val etfLabel: String
+        get() = listOf(etfName, etfCode).filter { it.isNotBlank() }.joinToString(" ")
 
     /** 卡片上的小标题：真·盘中估算才叫「估算涨跌」。 */
     val valueLabel: String
@@ -70,6 +89,10 @@ data class Estimate(
             if (quoteTime.isNotBlank()) {
                 append(" · ")
                 append(quoteTime)
+            }
+            if (note.isNotBlank()) {
+                append(" · ")
+                append(note)
             }
             if (!isRealtime) {
                 append("（非实时）")
@@ -127,11 +150,12 @@ fun weightedChange(rows: List<Pair<Double, Double>>): Double? {
 /**
  * Builds the estimate for one fund from its position and a batch of quotes.
  *
- * 依次尝试：目标 ETF 的涨跌 → 跟踪标的指数的涨跌 → 重仓股加权 → 最近公布的净值。
+ * 依次尝试：跟踪标的指数 → 目标 ETF → 重仓股加权 → 最近公布的净值。
  *
- * 指数的优先级排在重仓股前面：场外指数基金的前十大重仓通常只占四五成，
- * 加权出来的涨跌会系统性偏小；跟踪标的指数才是它真正复制的东西。重仓股
- * 留给没有跟踪标的的主动基金，以及指数一时解析不出来的情况。
+ * 指数优先的理由写在 [EstimateSource.INDEX] 上：场外基金复制的是指数，不是
+ * ETF 的场内价格。ETF 在这个顺序里只做兜底，指数识别不出来时才会用到。
+ * 重仓股留给没有跟踪标的的主动基金 —— 指数基金的前十大只占四五成，加权
+ * 出来的涨跌会系统性偏小。
  */
 fun estimateFund(
     fund: Fund,
@@ -140,22 +164,11 @@ fun estimateFund(
     /** 跟踪标的与它的实时行情。 */
     index: Pair<IndexEntry, RealtimeQuote>? = null
 ): Estimate? {
-    val etf = position?.etfCode
+    val etfQuote = position?.etfCode
         ?.takeIf { it.isNotBlank() }
         ?.let { quotes[exchangeSymbol(it)] }
-    if (etf != null) {
-        return Estimate(
-            percent = etf.changePercent,
-            nav = estimatedNav(fund.nav, etf.changePercent),
-            source = EstimateSource.ETF,
-            basis = listOf(
-                position.etfName.ifBlank { etf.name },
-                position.etfCode
-            ).filter { it.isNotBlank() }.joinToString(" "),
-            quoteTime = etf.time
-        )
-    }
 
+    // 1) 标的指数。有就先用它，不管有没有目标 ETF。
     if (index != null) {
         val (entry, quote) = index
         return Estimate(
@@ -163,9 +176,35 @@ fun estimateFund(
             nav = estimatedNav(fund.nav, quote.changePercent),
             source = EstimateSource.INDEX,
             basis = entry.name.ifBlank { entry.code },
-            quoteTime = quote.time
+            quoteTime = quote.time,
+            etfCode = position?.etfCode.orEmpty(),
+            etfName = position?.etfName.orEmpty(),
+            etfPercent = etfQuote?.changePercent
         )
     }
+
+    // 2) 指数没识别出来，退到目标 ETF，并把降级原因写清楚。
+    if (etfQuote != null) {
+        return Estimate(
+            percent = etfQuote.changePercent,
+            nav = estimatedNav(fund.nav, etfQuote.changePercent),
+            source = EstimateSource.ETF,
+            basis = listOf(
+                position.etfName.ifBlank { etfQuote.name },
+                position.etfCode
+            ).filter { it.isNotBlank() }.joinToString(" "),
+            quoteTime = etfQuote.time,
+            etfCode = position.etfCode,
+            etfName = position.etfName.ifBlank { etfQuote.name },
+            etfPercent = etfQuote.changePercent,
+            note = "标的指数未匹配，改用目标 ETF"
+        )
+    }
+
+    val etfMissingNote = position?.etfCode
+        ?.takeIf { it.isNotBlank() }
+        ?.let { "目标ETF $it 行情暂缺" }
+        .orEmpty()
 
     if (position != null) {
         val priced = position.stocks.mapNotNull { stock ->
@@ -182,7 +221,10 @@ fun estimateFund(
                     source = EstimateSource.HOLDINGS,
                     basis = "${priced.size} 只重仓股",
                     quoteTime = if (times.size == 1) times.first() else "盘中",
-                    coverage = priced.sumOf { it.first }
+                    coverage = priced.sumOf { it.first },
+                    etfCode = position.etfCode,
+                    etfName = position.etfName,
+                    note = etfMissingNote
                 )
             }
         }
@@ -195,7 +237,9 @@ fun estimateFund(
             nav = fund.nav,
             source = EstimateSource.NAV,
             basis = "",
-            quoteTime = fund.navDate
+            quoteTime = fund.navDate,
+            etfCode = position?.etfCode.orEmpty(),
+            etfName = position?.etfName.orEmpty()
         )
     }
     return null

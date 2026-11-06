@@ -50,6 +50,8 @@ import com.hukua.fundradar.data.AiAdvisor
 import com.hukua.fundradar.data.AiConfig
 import com.hukua.fundradar.data.BarkNotifier
 import com.hukua.fundradar.data.SettingsStore
+import com.hukua.fundradar.data.SourceCheck
+import com.hukua.fundradar.data.SourceCheckRow
 import com.hukua.fundradar.work.DailyScheduler
 import kotlinx.coroutines.launch
 
@@ -63,12 +65,16 @@ fun SettingsScreen(onBack: () -> Unit) {
     var config by remember { mutableStateOf(store.load()) }
     var testing by remember { mutableStateOf(false) }
     var pushing by remember { mutableStateOf(false) }
+    var checking by remember { mutableStateOf(false) }
+    var checks by remember { mutableStateOf<List<SourceCheckRow>>(emptyList()) }
 
     SettingsContent(
         config = config,
         snackbarHostState = snackbar,
         testing = testing,
         pushing = pushing,
+        checks = checks,
+        checking = checking,
         onBack = onBack,
         onConfigChange = { updated ->
             val scheduleChanged = updated.dailyEnabled != config.dailyEnabled ||
@@ -77,6 +83,13 @@ fun SettingsScreen(onBack: () -> Unit) {
             config = updated
             store.save(updated)
             if (scheduleChanged) DailyScheduler.apply(context, updated)
+        },
+        onCheck = {
+            checking = true
+            scope.launch {
+                checks = runCatching { SourceCheck.run(context) }.getOrDefault(emptyList())
+                checking = false
+            }
         },
         onTest = {
             testing = true
@@ -115,10 +128,13 @@ fun SettingsContent(
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     testing: Boolean = false,
     pushing: Boolean = false,
+    checks: List<SourceCheckRow> = emptyList(),
+    checking: Boolean = false,
     onBack: () -> Unit = {},
     onConfigChange: (AiConfig) -> Unit = {},
     onTest: () -> Unit = {},
     onPush: () -> Unit = {},
+    onCheck: () -> Unit = {},
     onSave: () -> Unit = {}
 ) {
     Scaffold(
@@ -198,6 +214,52 @@ fun SettingsContent(
                         Spacer(Modifier.width(8.dp))
                     }
                     Text("测试连接")
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            SectionCard(
+                title = "估值数据源自检",
+                subtitle = "盘中估算要连过「基金持仓 → 交易所行情 → 标的指数」三关，" +
+                    "这里把每一步的真实返回摊开，出问题一眼看出卡在哪"
+            ) {
+                TextButton(enabled = !checking, onClick = onCheck) {
+                    if (checking) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (checks.isEmpty()) "开始自检" else "重新自检")
+                }
+                checks.forEach { row ->
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.Top) {
+                        Text(
+                            text = if (row.ok) "✓" else "✗",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (row.ok) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = row.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = row.detail,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
             }
 

@@ -18,6 +18,10 @@ data class RealtimeQuote(
  * batch in one GBK request, needs no key and is not rate limited like the
  * eastmoney quote hosts. That makes it the right source for the intraday
  * estimate, where a dozen codes are asked for at once.
+ *
+ * 腾讯偶尔会整段查不到（部分网络直接掐掉 qt.gtimg.cn，或者只回了股票没回
+ * ETF），这时再拿东财的批量行情补一遍 —— 目标 ETF 的涨跌是估算里最关键的一
+ * 个数，不能因为一个域名不通就退回标的指数。
  */
 object QuoteApi {
 
@@ -32,11 +36,63 @@ object QuoteApi {
         if (cleaned.isEmpty()) return emptyMap()
 
         val result = LinkedHashMap<String, RealtimeQuote>()
+        result.putAll(fromTencent(cleaned))
+
+        val missing = cleaned.filterNot { result.containsKey(it) }
+        if (missing.isNotEmpty()) {
+            result.putAll(fromEastmoney(missing))
+        }
+        return result
+    }
+
+    /** 只用腾讯源，自检时单独调用。 */
+    suspend fun fromTencent(symbols: Collection<String>): Map<String, RealtimeQuote> {
+        val cleaned = symbols.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (cleaned.isEmpty()) return emptyMap()
+        val result = LinkedHashMap<String, RealtimeQuote>()
         cleaned.chunked(BATCH).forEach { chunk ->
             val body = fetchChunk(chunk) ?: return@forEach
             result.putAll(parseQuotes(body))
         }
         return result
+    }
+
+    /**
+     * 东财批量行情，作为腾讯的备份。`sh515220` → `1.515220`，`sz159819` →
+     * `0.159819`；港股/美股东财用的是别的市场号，这里不接。
+     */
+    suspend fun fromEastmoney(symbols: Collection<String>): Map<String, RealtimeQuote> {
+        val pairs = symbols.mapNotNull { symbol ->
+            secidOf(symbol)?.let { it to symbol }
+        }
+        if (pairs.isEmpty()) return emptyMap()
+
+        val bySecid = pairs.toMap()
+        val result = LinkedHashMap<String, RealtimeQuote>()
+        pairs.map { it.first }.chunked(BATCH).forEach chunk@{ chunk ->
+            val path = "/api/qt/ulist.np/get?secids=" + chunk.joinToString(",") +
+                "&fields=f2,f3,f12,f13,f14,f124&fltt=2&ut=fa5fd1943c7b386f172d6893dbfba10b"
+            val body = EmQuoteHosts.get(path, referer = "https://quote.eastmoney.com/", readTimeoutMs = 8_000)
+                ?: return@chunk
+            IndexQuoteApi.parse(body).forEach row@{ (secid, quote) ->
+                val symbol = bySecid[secid] ?: return@row
+                result[symbol] = quote.copy(symbol = symbol)
+            }
+        }
+        return result
+    }
+
+    /** `sh515220` → `1.515220`。北交所和深市同属 0 号市场。 */
+    internal fun secidOf(symbol: String): String? {
+        val text = symbol.trim().lowercase(Locale.US)
+        val market = when {
+            text.startsWith("sh") -> "1"
+            text.startsWith("sz") -> "0"
+            text.startsWith("bj") -> "0"
+            else -> return null
+        }
+        val code = text.substring(2)
+        return if (code.isBlank()) null else "$market.$code"
     }
 
     /** 先走 HTTPS；个别网络环境会拦掉，退回 HTTP 再来一次。 */

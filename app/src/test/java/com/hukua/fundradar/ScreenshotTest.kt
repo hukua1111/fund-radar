@@ -267,16 +267,22 @@ class ScreenshotTest {
         "161725" to Estimate(
             percent = 5.58,
             nav = 0.5992,
-            source = EstimateSource.ETF,
-            basis = "酒ETF 512690",
-            quoteTime = "11-05 15:00"
+            source = EstimateSource.INDEX,
+            basis = "中证白酒",
+            quoteTime = "11-05 15:00",
+            etfCode = "512690",
+            etfName = "酒ETF",
+            etfPercent = 5.62
         ),
         "012414" to Estimate(
             percent = 5.61,
             nav = 0.5964,
-            source = EstimateSource.ETF,
-            basis = "酒ETF 512690",
-            quoteTime = "11-05 15:00"
+            source = EstimateSource.INDEX,
+            basis = "中证白酒",
+            quoteTime = "11-05 15:00",
+            etfCode = "512690",
+            etfName = "酒ETF",
+            etfPercent = 5.62
         ),
         "110022" to Estimate(
             percent = 2.31,

@@ -35,6 +35,7 @@ import com.hukua.fundradar.data.Holding
 import com.hukua.fundradar.data.amountText
 import com.hukua.fundradar.data.sharesText
 import com.hukua.fundradar.data.signedAmountText
+import com.hukua.fundradar.ui.theme.LocalMarketColors
 import java.util.Locale
 
 /** 「我的持仓」弹层：买入 / 卖出 / 直接改份额，三种用法共用一个面板。 */
@@ -49,7 +50,8 @@ fun HoldingSheet(
     onNavChange: (String) -> Unit,
     onFillAll: () -> Unit,
     onSubmit: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onCostInputChange: (CostInput) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -65,7 +67,8 @@ fun HoldingSheet(
             onAmountChange = onAmountChange,
             onNavChange = onNavChange,
             onFillAll = onFillAll,
-            onSubmit = onSubmit
+            onSubmit = onSubmit,
+            onCostInputChange = onCostInputChange
         )
     }
 }
@@ -81,7 +84,8 @@ fun HoldingSheetContent(
     onNavChange: (String) -> Unit,
     onFillAll: () -> Unit,
     onSubmit: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onCostInputChange: (CostInput) -> Unit = {}
 ) {
     Column(
         modifier = modifier
@@ -199,20 +203,41 @@ fun HoldingSheetContent(
                     placeholder = "1000.0000"
                 )
                 Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CostInput.entries.forEach { input ->
+                        FilterChip(
+                            selected = state.costInput == input,
+                            onClick = { onCostInputChange(input) },
+                            modifier = Modifier.height(30.dp),
+                            label = {
+                                Text(input.label, style = MaterialTheme.typography.labelSmall)
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            ),
+                            border = null
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
                 NumberField(
-                    label = "持有金额（元）",
+                    label = state.costInput.fieldLabel,
                     value = state.cost,
                     onValueChange = onCostChange,
-                    placeholder = "1234.56"
+                    placeholder = if (state.costInput == CostInput.PRICE) "2.2795" else "1602.42"
                 )
                 Spacer(Modifier.height(10.dp))
-                val price = if (state.sharesValue > 0) state.costValue / state.sharesValue else 0.0
-                Text(
-                    text = "填买入时投进去的钱，盈亏 = 市值 − 持有金额；成本单价 " +
-                        String.format(Locale.US, "%.4f", price),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                EditPreview(state)
+                if (state.looksLikeMarketValue) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "这个金额和「份额 × 最新净值」几乎一样，像是持有金额（市值）而不是成本。" +
+                            "照基金 App 填「持仓成本价」更准。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
 
@@ -248,6 +273,49 @@ fun HoldingSheetContent(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+@Composable
+private fun EditPreview(state: HoldingSheetState) {
+    val market = LocalMarketColors.current
+    val cost = state.costValue
+    if (state.sharesValue <= 0 || cost <= 0) {
+        Text(
+            text = "照基金 App 填「持有份额」和「持仓成本价」即可；成本价就是买入时的单价，不是持有金额。",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+
+    val profit = state.profitPreview
+    val percent = if (cost > 0 && profit != null) profit / cost * 100 else null
+    val color = when {
+        profit == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        profit > 0 -> market.up
+        profit < 0 -> market.down
+        else -> market.flat
+    }
+
+    Column {
+        Text(
+            text = "成本合计 " + amountText(cost) + " 元 · 成本单价 " +
+                String.format(Locale.US, "%.4f", state.costPrice),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (profit != null && state.navValue > 0) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "按净值 " + String.format(Locale.US, "%.4f", state.navValue) +
+                    " 市值 " + amountText(state.sharesValue * state.navValue) + " 元 · 浮动盈亏 " +
+                    signedAmountText(profit) +
+                    (percent?.let { "（" + String.format(Locale.US, "%+.2f", it) + "%）" } ?: ""),
+                style = MaterialTheme.typography.labelMedium,
+                color = color
+            )
+        }
     }
 }
 

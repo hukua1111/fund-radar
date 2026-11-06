@@ -11,6 +11,7 @@ import com.hukua.fundradar.data.estimateFund
 import com.hukua.fundradar.data.exchangeSymbol
 import com.hukua.fundradar.data.weightedChange
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -205,8 +206,8 @@ class EstimateTest {
     }
 
     @Test
-    fun etfBeatsTrackedIndex() {
-        // 联接基金先看目标 ETF：那是它真金白银买下的东西。
+    fun trackedIndexBeatsEtf() {
+        // 指数优先：场外基金复制的是指数，ETF 只是它的场内载体，日内还带溢价。
         val fund = Fund(code = "008280", name = "国泰中证煤炭ETF联接C", nav = 2.1532)
         val position = FundPosition(etfCode = "515220", etfName = "煤炭ETF国泰")
         val quotes = QuoteApi.parseQuotes(quoteLine)
@@ -215,8 +216,54 @@ class EstimateTest {
         val estimate = requireNotNull(
             estimateFund(fund, position, quotes, entry to quote("sz399998", 9.99))
         )
+        assertEquals(EstimateSource.INDEX, estimate.source)
+        assertEquals(9.99, estimate.percent, 1e-9)
+        assertEquals("中证煤炭", estimate.basis)
+        // ETF 仍然记下来，详情页当参考展示。
+        assertEquals("515220", estimate.etfCode)
+        assertEquals("煤炭ETF国泰", estimate.etfName)
+        assertEquals("", estimate.note)
+    }
+
+    @Test
+    fun etfOnlyUsedWhenIndexMissing() {
+        // 指数识别不出来时退到目标 ETF，并把降级原因写清楚。
+        val fund = Fund(code = "008280", name = "国泰中证煤炭ETF联接C", nav = 2.1532)
+        val position = FundPosition(etfCode = "515220", etfName = "煤炭ETF国泰")
+        val quotes = QuoteApi.parseQuotes(quoteLine)
+
+        val estimate = requireNotNull(estimateFund(fund, position, quotes, index = null))
         assertEquals(EstimateSource.ETF, estimate.source)
         assertEquals(-3.14, estimate.percent, 1e-9)
+        assertEquals("515220", estimate.etfCode)
+        assertTrue(estimate.note.contains("标的指数未匹配"))
+        assertTrue(estimate.footnote.contains("改用目标 ETF"))
+    }
+
+    @Test
+    fun indexWinsEvenWithoutEtfQuote() {
+        // 指数口径跟 ETF 行情通不通没关系：指数优先之后，ETF 取不到也不该把
+        // 估算拖垮，更不该在界面上留下「行情暂缺」的告警。
+        val fund = Fund(code = "008280", name = "国泰中证煤炭ETF联接C", nav = 2.1532)
+        val position = FundPosition(etfCode = "515220", etfName = "煤炭ETF国泰")
+        val entry = IndexEntry("399998", 0, "中证煤炭")
+
+        val estimate = requireNotNull(
+            estimateFund(fund, position, emptyMap(), entry to quote("sz399998", 0.14))
+        )
+        assertEquals(EstimateSource.INDEX, estimate.source)
+        assertEquals(0.14, estimate.percent, 1e-9)
+        assertEquals("515220", estimate.etfCode)
+        assertEquals("", estimate.note)
+        assertFalse(estimate.footnote.contains("行情暂缺"))
+    }
+
+    @Test
+    fun quoteSecidMappingCoversBothExchanges() {
+        assertEquals("1.515220", QuoteApi.secidOf("sh515220"))
+        assertEquals("0.159819", QuoteApi.secidOf("sz159819"))
+        assertEquals("0.835185", QuoteApi.secidOf("bj835185"))
+        assertNull(QuoteApi.secidOf("hk00700"))
     }
 
     @Test

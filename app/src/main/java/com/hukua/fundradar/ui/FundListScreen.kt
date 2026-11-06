@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundScope
+import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.data.amountText
 import com.hukua.fundradar.data.growthText
@@ -93,6 +94,12 @@ fun FundRadarScreen(
     viewModel: FundViewModel,
     onOpenSettings: () -> Unit = {},
     onOpenDetail: (Fund) -> Unit = viewModel::openDetail,
+    /** 指数行情条，只有持仓页用；限购页传默认值即可。 */
+    indices: IndexUiState = IndexUiState(loading = false),
+    onOpenKline: (IndexEntry, String) -> Unit = { _, _ -> },
+    onAddIndex: () -> Unit = {},
+    onRemoveIndex: (String) -> Unit = {},
+    onRefreshIndices: () -> Unit = {},
     bottomBar: @Composable () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -110,7 +117,10 @@ fun FundRadarScreen(
     FundRadarContent(
         state = state,
         snackbarHostState = snackbarHostState,
-        onRefresh = viewModel::refresh,
+        onRefresh = {
+            viewModel.refresh()
+            onRefreshIndices()
+        },
         onSelectFilter = viewModel::setFilter,
         onOpenDetail = onOpenDetail,
         onAddClick = viewModel::openAdd,
@@ -118,6 +128,10 @@ fun FundRadarScreen(
         onDismissChanges = viewModel::dismissChanges,
         onImportPortfolio = viewModel::importPortfolio,
         onOpenSettings = onOpenSettings,
+        indices = indices,
+        onOpenKline = onOpenKline,
+        onAddIndex = onAddIndex,
+        onRemoveIndex = onRemoveIndex,
         bottomBar = bottomBar
     )
 
@@ -148,6 +162,10 @@ fun FundRadarContent(
     onDismissChanges: () -> Unit = {},
     onImportPortfolio: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    indices: IndexUiState = IndexUiState(loading = false),
+    onOpenKline: (IndexEntry, String) -> Unit = { _, _ -> },
+    onAddIndex: () -> Unit = {},
+    onRemoveIndex: (String) -> Unit = {},
     bottomBar: @Composable () -> Unit = {}
 ) {
     val portfolio = state.scope.isPortfolio
@@ -228,6 +246,18 @@ fun FundRadarContent(
                 }
 
                 item(key = "summary") { SummaryCard(state) }
+
+                if (portfolio) {
+                    item(key = "indices") {
+                        IndexStrip(
+                            state = indices,
+                            onOpenKline = onOpenKline,
+                            onAddClick = onAddIndex,
+                            onRemove = onRemoveIndex,
+                            modifier = Modifier.padding(bottom = 2.dp)
+                        )
+                    }
+                }
 
                 if (!portfolio) {
                     item(key = "filters") {
@@ -768,7 +798,7 @@ private fun SummaryCard(state: FundUiState) {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = state.estimatesError
-                        ?: "按目标 ETF / 标的指数 / 重仓股估算，每分钟自动刷新",
+                        ?: "按跟踪指数 / 目标 ETF / 重仓股估算，每分钟自动刷新",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (state.estimatesError != null) {
                         MaterialTheme.colorScheme.error

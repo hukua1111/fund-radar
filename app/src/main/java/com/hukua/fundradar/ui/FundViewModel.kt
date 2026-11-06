@@ -76,9 +76,12 @@ data class FundUiState(
     val suspendedCount: Int get() = all.count { it.limitType == LimitType.SUSPENDED }
     val openCount: Int get() = all.count { it.limitType == LimitType.OPEN }
 
-    /** Funds with a usable estimate, and how many of those are ETF based. */
+    /** Funds with a usable estimate, and how many of those use the tracked index. */
     val estimatedCount: Int get() = all.count { estimates[it.code]?.isRealtime == true }
-    val etfCount: Int get() = estimates.values.count { it.source == com.hukua.fundradar.data.EstimateSource.ETF }
+    val indexCount: Int
+        get() = estimates.values.count {
+            it.source == com.hukua.fundradar.data.EstimateSource.INDEX
+        }
 
     /** 估算净值优先，拿不到估算就用最近公布的净值。 */
     fun navOf(fund: Fund): Double = estimates[fund.code]?.nav ?: fund.nav
@@ -152,6 +155,19 @@ enum class HoldingMode(val label: String) {
     EDIT("修改持仓")
 }
 
+/**
+ * 「修改持仓」里成本的两种输入口径。
+ *
+ * 基金 App 的持仓页同时给出「持有金额」和「持仓成本价」，两者含义完全不同：
+ * 持有金额是**市值**（份额 × 最新净值），持仓成本价才是买入成本。以前只让填
+ * 金额，用户照着「持有金额」抄进来，成本就被记成了市值，盈亏自然全错。现在
+ * 默认按成本价录入，需要时再切成金额。
+ */
+enum class CostInput(val label: String, val fieldLabel: String) {
+    PRICE("按成本价", "持仓成本价（元/份）"),
+    AMOUNT("按成本金额", "持仓成本金额（元）")
+}
+
 /** 「我的持仓」底部弹层的状态，输入全部保留成字符串，方便带小数点输入。 */
 data class HoldingSheetState(
     val open: Boolean = false,
@@ -160,6 +176,7 @@ data class HoldingSheetState(
     val mode: HoldingMode = HoldingMode.BUY,
     val shares: String = "",
     val cost: String = "",
+    val costInput: CostInput = CostInput.PRICE,
     val amount: String = "",
     val nav: String = "",
     val message: String? = null,
@@ -169,7 +186,35 @@ data class HoldingSheetState(
     val navValue: Double get() = nav.toDoubleOrNull() ?: 0.0
     val amountValue: Double get() = amount.toDoubleOrNull() ?: 0.0
     val sharesValue: Double get() = shares.toDoubleOrNull() ?: 0.0
-    val costValue: Double get() = cost.toDoubleOrNull() ?: 0.0
+
+    /** 输入框里的那个数：成本价或成本金额，看 [costInput]。 */
+    val costInputValue: Double get() = cost.toDoubleOrNull() ?: 0.0
+
+    /** 成本合计（元）——修改持仓时按口径换算出来。 */
+    val costValue: Double
+        get() = when {
+            mode != HoldingMode.EDIT -> 0.0
+            costInput == CostInput.PRICE -> sharesValue * costInputValue
+            else -> costInputValue
+        }
+
+    /** 成本单价，用于面板上的预览。 */
+    val costPrice: Double
+        get() = if (sharesValue > 0) costValue / sharesValue else 0.0
+
+    /** 按预览成本算出来的浮动盈亏；没有净值时为 null。 */
+    val profitPreview: Double?
+        get() = if (navValue > 0 && costValue > 0) sharesValue * navValue - costValue else null
+
+    /**
+     * 填进来的「成本金额」和当前市值几乎一样 —— 多半是把「持有金额」当成本抄了。
+     * 面板据此给一句提醒，而不是默默记错账。
+     */
+    val looksLikeMarketValue: Boolean
+        get() = mode == HoldingMode.EDIT &&
+            costInput == CostInput.AMOUNT &&
+            navValue > 0 && sharesValue > 0 && costValue > 0 &&
+            kotlin.math.abs(costValue - sharesValue * navValue) <= sharesValue * navValue * 0.005
 
     /** 买入按金额折算份额，卖出与直接修改按份额。 */
     val effectiveShares: Double
@@ -463,7 +508,8 @@ class FundViewModel(
                 HoldingMode.EDIT -> plainShares(holding.shares)
                 HoldingMode.BUY -> ""
             },
-            cost = if (mode == HoldingMode.EDIT) plainMoney(holding.cost) else "",
+            cost = if (mode == HoldingMode.EDIT) plainPrice(holding.avgCost) else "",
+            costInput = CostInput.PRICE,
             amount = "",
             nav = if (nav > 0) plainNav(nav) else "",
             current = holding
@@ -485,7 +531,8 @@ class FundViewModel(
                 HoldingMode.EDIT -> plainShares(sheet.current.shares)
                 HoldingMode.BUY -> ""
             },
-            cost = if (mode == HoldingMode.EDIT) plainMoney(sheet.current.cost) else ""
+            cost = if (mode == HoldingMode.EDIT) plainPrice(sheet.current.avgCost) else "",
+            costInput = CostInput.PRICE
         )
     }
 
@@ -495,6 +542,18 @@ class FundViewModel(
 
     fun onHoldingCostChange(value: String) {
         _holdingSheet.update { it.copy(cost = value.filterNumeric(), message = null) }
+    }
+
+    /** 切换成本口径，顺手把输入框里的数换成对应的值，避免口径切换后数字错位。 */
+    fun onHoldingCostInputChange(input: CostInput) {
+        _holdingSheet.update { sheet ->
+            if (sheet.costInput == input) return@update sheet
+            val converted = when (input) {
+                CostInput.PRICE -> plainPrice(sheet.current.avgCost)
+                CostInput.AMOUNT -> plainMoney(sheet.current.cost)
+            }
+            sheet.copy(costInput = input, cost = converted, message = null)
+        }
     }
 
     fun onHoldingAmountChange(value: String) {
@@ -574,6 +633,10 @@ class FundViewModel(
 
     private fun plainMoney(value: Double): String =
         if (value <= 0) "" else String.format(Locale.US, "%.2f", value)
+
+    /** 成本单价保留四位，和基金 App 上的「持仓成本价」对齐。 */
+    private fun plainPrice(value: Double): String =
+        if (value <= 0) "" else String.format(Locale.US, "%.4f", value)
 
     private fun plainNav(value: Double): String =
         String.format(Locale.US, "%.4f", value)

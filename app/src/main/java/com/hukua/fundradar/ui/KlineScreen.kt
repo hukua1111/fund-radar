@@ -69,6 +69,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hukua.fundradar.data.BollingerBands
 import com.hukua.fundradar.data.Candle
 import com.hukua.fundradar.data.KlineSeries
+import com.hukua.fundradar.data.Macd
 import com.hukua.fundradar.data.SwingAction
 import com.hukua.fundradar.data.growthText
 import com.hukua.fundradar.data.movingAverage
@@ -92,6 +93,10 @@ private val MA_COLORS = listOf(
 
 /** 布林带：上/中/下轨同一色系，填充很淡，避免盖住蜡烛。 */
 private val BOLL_COLOR = Color(0xFF4C8DFF)
+
+/** MACD：DIF 快线用金色，DEA 慢线用蓝色，柱子跟随涨跌色。 */
+private val DIF_COLOR = Color(0xFFF5A524)
+private val DEA_COLOR = Color(0xFF2F80ED)
 
 data class MaLine(val period: Int, val color: Color, val values: List<Double?>)
 
@@ -158,7 +163,7 @@ fun KlineContent(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = state.code + " · 指数日K · BOLL(20,2)",
+                            text = state.code + " · 指数日K · BOLL(20,2) · MACD(12,26,9)",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -198,8 +203,8 @@ fun KlineContent(
             )
             Spacer(Modifier.height(16.dp))
             Text(
-                text = "K线、均线、布林带与成交量均由天天基金公开数据计算，" +
-                    "长按图表可查看单日行情；AI 判断仅供参考，不构成投资建议。",
+                text = "K线、均线、布林带、MACD 与成交量均由天天基金公开数据计算，" +
+                    "长按图表可查看单日行情；AI 判断会带上大盘、板块、重仓与账户数据，仅供参考，不构成投资建议。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -403,6 +408,7 @@ private fun ChartCard(state: KlineUiState, onPreset: (Int) -> Unit) {
                         KlineSeries.MA_PERIODS.associateWith { period -> series.ma(period) }
                     }
                     val allBoll = remember(series) { series.boll() }
+                    val allMacd = remember(series) { series.macd() }
 
                     val lines = KlineSeries.MA_PERIODS.mapIndexed { index, period ->
                         MaLine(
@@ -418,6 +424,14 @@ private fun ChartCard(state: KlineUiState, onPreset: (Int) -> Unit) {
                         upper = allBoll.upper.drop(offset).take(visible.size),
                         lower = allBoll.lower.drop(offset).take(visible.size)
                     )
+                    val macd = Macd(
+                        fast = allMacd.fast,
+                        slow = allMacd.slow,
+                        signal = allMacd.signal,
+                        dif = allMacd.dif.drop(offset).take(visible.size),
+                        dea = allMacd.dea.drop(offset).take(visible.size),
+                        hist = allMacd.hist.drop(offset).take(visible.size)
+                    )
 
                     var selected by remember(series.code, start, end) {
                         mutableStateOf<Int?>(null)
@@ -425,6 +439,7 @@ private fun ChartCard(state: KlineUiState, onPreset: (Int) -> Unit) {
                     var showMa by rememberSaveable { mutableStateOf(true) }
                     var showBoll by rememberSaveable { mutableStateOf(true) }
                     var showVolume by rememberSaveable { mutableStateOf(true) }
+                    var showMacd by rememberSaveable { mutableStateOf(true) }
 
                     val focus = (selected ?: visible.lastIndex).coerceIn(0, max(0, visible.lastIndex))
 
@@ -434,9 +449,11 @@ private fun ChartCard(state: KlineUiState, onPreset: (Int) -> Unit) {
                         showMa = showMa,
                         showBoll = showBoll,
                         showVolume = showVolume,
+                        showMacd = showMacd,
                         onToggleMa = { showMa = !showMa },
                         onToggleBoll = { showBoll = !showBoll },
-                        onToggleVolume = { showVolume = !showVolume }
+                        onToggleVolume = { showVolume = !showVolume },
+                        onToggleMacd = { showMacd = !showMacd }
                     )
                     Spacer(Modifier.height(6.dp))
                     CandleChart(
@@ -444,11 +461,12 @@ private fun ChartCard(state: KlineUiState, onPreset: (Int) -> Unit) {
                         maLines = if (showMa) lines else emptyList(),
                         boll = if (showBoll) boll else null,
                         showVolume = showVolume,
+                        macd = if (showMacd) macd else null,
                         selected = selected,
                         onSelect = { selected = it },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(340.dp)
+                            .height(if (showMacd) 400.dp else 340.dp)
                     )
                     Spacer(Modifier.height(2.dp))
                     WindowPicker(
@@ -474,6 +492,7 @@ private fun ChartCard(state: KlineUiState, onPreset: (Int) -> Unit) {
                             allMa.getValue(period).getOrNull(offset + focus)
                         },
                         boll = if (showBoll) boll else null,
+                        macd = if (showMacd) macd else null,
                         focus = focus,
                         latestClose = visible.getOrNull(focus)?.close,
                         showMa = showMa
@@ -552,14 +571,17 @@ private fun IndicatorRow(
     showMa: Boolean,
     showBoll: Boolean,
     showVolume: Boolean,
+    showMacd: Boolean,
     onToggleMa: () -> Unit,
     onToggleBoll: () -> Unit,
-    onToggleVolume: () -> Unit
+    onToggleVolume: () -> Unit,
+    onToggleMacd: () -> Unit
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         IndicatorToggle("均线", showMa, onToggleMa)
         IndicatorToggle("布林带", showBoll, onToggleBoll)
         IndicatorToggle("成交量", showVolume, onToggleVolume)
+        IndicatorToggle("MACD", showMacd, onToggleMacd)
     }
 }
 
@@ -587,6 +609,7 @@ private fun IndicatorToggle(label: String, selected: Boolean, onClick: () -> Uni
 private fun IndicatorLegend(
     maValues: Map<Int, Double?>,
     boll: BollingerBands?,
+    macd: Macd?,
     focus: Int,
     latestClose: Double?,
     showMa: Boolean
@@ -657,7 +680,70 @@ private fun IndicatorLegend(
                 )
             }
         }
+
+        if (macd != null) {
+            Spacer(Modifier.height(4.dp))
+            val dif = macd.dif.getOrNull(focus)
+            val dea = macd.dea.getOrNull(focus)
+            val hist = macd.hist.getOrNull(focus)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "MACD(${macd.fast},${macd.slow},${macd.signal})",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "DIF " + (dif?.let { macdText(it) } ?: "—"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = DIF_COLOR
+                )
+                Text(
+                    text = "DEA " + (dea?.let { macdText(it) } ?: "—"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = DEA_COLOR
+                )
+                Text(
+                    text = "柱 " + (hist?.let { macdText(it) } ?: "—"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if ((hist ?: 0.0) >= 0) {
+                        LocalMarketColors.current.up
+                    } else {
+                        LocalMarketColors.current.down
+                    }
+                )
+            }
+            if (dif != null && dea != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = macdStateText(dif, dea, hist),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
+}
+
+/** MACD 的数值量级很小，统一保留四位小数并带符号。 */
+private fun macdText(value: Double): String = String.format(Locale.US, "%+.4f", value)
+
+/**
+ * 一句人话解释当前 MACD 状态：零轴上下、金叉死叉、柱子放大还是缩短。
+ * 只是把数字翻译成中文，不做任何预测。
+ */
+private fun macdStateText(dif: Double, dea: Double, hist: Double?): String {
+    val zone = if (dif >= 0 && dea >= 0) "零轴上方" else if (dif < 0 && dea < 0) "零轴下方" else "零轴附近"
+    val cross = when {
+        dif > dea && hist != null && hist > 0 -> "DIF 在 DEA 之上（金叉后）"
+        dif < dea && hist != null && hist < 0 -> "DIF 在 DEA 之下（死叉后）"
+        else -> "DIF 与 DEA 粘合"
+    }
+    return "$zone · $cross"
 }
 
 @Composable
@@ -666,6 +752,7 @@ private fun CandleChart(
     maLines: List<MaLine>,
     boll: BollingerBands?,
     showVolume: Boolean,
+    macd: Macd?,
     selected: Int?,
     onSelect: (Int?) -> Unit,
     modifier: Modifier = Modifier
@@ -702,17 +789,22 @@ private fun CandleChart(
         val topPad = 6.dp.toPx()
         val gap = 12.dp.toPx()
         val volumeHeight = if (showVolume) 52.dp.toPx() else 0f
+        val macdHeight = if (macd != null) 58.dp.toPx() else 0f
 
         val leftPad = leftPadPx
         val plotWidth = size.width - leftPad - axisWidthPx
         if (plotWidth <= 0f) return@Canvas
 
+        val subHeight = (if (showVolume) volumeHeight + gap else 0f) +
+            (if (macd != null) macdHeight + gap else 0f)
         val priceTop = topPad
-        val priceBottom = size.height - bottomPad - (if (showVolume) volumeHeight + gap else 0f)
+        val priceBottom = size.height - bottomPad - subHeight
         val priceHeight = priceBottom - priceTop
         if (priceHeight <= 0f) return@Canvas
         val volTop = priceBottom + gap
-        val volBottom = size.height - bottomPad
+        val volBottom = volTop + volumeHeight
+        val macdTop = if (showVolume) volBottom + gap else priceBottom + gap
+        val macdBottom = macdTop + macdHeight
 
         var min = candles.minOf { it.low }
         var max = candles.maxOf { it.high }
@@ -926,6 +1018,67 @@ private fun CandleChart(
             }
         }
 
+        // MACD 副图：零轴 + 柱状线 + DIF/DEA
+        if (macd != null) {
+            val values = macd.dif + macd.dea + macd.hist
+            val usable = values.filterNotNull()
+            if (usable.isNotEmpty()) {
+                val span = max(abs(usable.min()), abs(usable.max()))
+                val scale = if (span > 1e-9) span else 1.0
+                fun yOfMacd(value: Double): Float =
+                    macdTop + macdHeight / 2f - (value / scale * (macdHeight / 2f) * 0.92f).toFloat()
+
+                val zeroY = macdTop + macdHeight / 2f
+                drawLine(
+                    color = gridColor,
+                    start = Offset(leftPad, zeroY),
+                    end = Offset(leftPad + plotWidth, zeroY),
+                    strokeWidth = 1f
+                )
+
+                val bodyWidth = max(1.2f, slot * 0.5f)
+                macd.hist.forEachIndexed { index, value ->
+                    if (value == null) return@forEachIndexed
+                    val y = yOfMacd(value)
+                    val color = if (value >= 0) market.up else market.down
+                    drawRect(
+                        color = color.copy(alpha = 0.72f),
+                        topLeft = Offset(centerX(index) - bodyWidth / 2f, min(y, zeroY)),
+                        size = Size(bodyWidth, max(1f, abs(y - zeroY)))
+                    )
+                }
+
+                listOf(macd.dif to DIF_COLOR, macd.dea to DEA_COLOR).forEach { (series, color) ->
+                    var previous: Offset? = null
+                    series.forEachIndexed { index, value ->
+                        if (value == null) {
+                            previous = null
+                            return@forEachIndexed
+                        }
+                        val point = Offset(centerX(index), yOfMacd(value))
+                        previous?.let { from ->
+                            drawLine(
+                                color = color,
+                                start = from,
+                                end = point,
+                                strokeWidth = 1.3.dp.toPx()
+                            )
+                        }
+                        previous = point
+                    }
+                }
+
+                val layout = textMeasurer.measure(
+                    text = "MACD",
+                    style = TextStyle(fontSize = 8.sp, color = labelColor)
+                )
+                drawText(
+                    textLayoutResult = layout,
+                    topLeft = Offset(leftPad + plotWidth + 4.dp.toPx(), macdTop)
+                )
+            }
+        }
+
         // 日期轴：首、末，长按时中间再补一个选中日期
         val dateStyle = TextStyle(fontSize = 8.sp, color = labelColor)
         val first = candles.first().date.takeLast(5)
@@ -954,7 +1107,7 @@ private fun CandleChart(
             drawLine(
                 color = crossColor,
                 start = Offset(x, priceTop),
-                end = Offset(x, volBottom),
+                end = Offset(x, if (macd != null) macdBottom else volBottom),
                 strokeWidth = 1f
             )
             drawLine(
@@ -1062,10 +1215,19 @@ private fun AiSection(
                 color = MaterialTheme.colorScheme.onPrimary
             )
             Spacer(Modifier.width(10.dp))
-            Text("AI 分析中…")
+            Text(if (state.preparing) "正在汇总大盘与持仓…" else "AI 分析中…")
         } else {
             Text(if (state.verdict == null) "AI 波段判断" else "重新判断")
         }
+    }
+
+    if (state.contextSummary.isNotBlank()) {
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "本轮带上：" + state.contextSummary,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 
     val verdict = state.verdict

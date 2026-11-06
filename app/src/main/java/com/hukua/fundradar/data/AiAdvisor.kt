@@ -51,7 +51,8 @@ data class BatchVerdict(
 /**
  * Asks an OpenAI-compatible chat endpoint whether now looks like a good moment
  * to swing-trade this fund. The model only sees numbers we computed locally
- * (NAV/OHLC, MA5/10/20/60, recent changes) so the answer stays grounded.
+ * (大盘、板块相对强弱、OHLC、均线、MACD、BOLL、账户成本) so the answer stays
+ * grounded and can be traced back to a specific number.
  */
 object AiAdvisor {
 
@@ -60,7 +61,8 @@ object AiAdvisor {
         fundName: String,
         code: String,
         series: KlineSeries,
-        subject: String = "基金"
+        subject: String = "基金",
+        context: AiContext = AiContext()
     ): AiVerdict = withContext(Dispatchers.IO) {
         require(config.configured) { "还没有配置 AI 接口" }
         val latest = series.latest ?: throw IllegalStateException("没有可用的行情数据")
@@ -77,6 +79,7 @@ object AiAdvisor {
         } else {
             null
         }
+        val macd = series.macd()
 
         val recent = series.candles.takeLast(10).joinToString("\n") { candle ->
             String.format(
@@ -90,7 +93,56 @@ object AiAdvisor {
             appendLine("$subject：${fundName.ifBlank { code }}（$code）")
             appendLine("数据来源：${if (series.source == KlineSource.EXCHANGE) "场内交易K线" else "场外每日净值"}")
             appendLine("最新日期：${latest.date}")
-            appendLine("最新价格/净值：${String.format(Locale.US, "%.4f", latest.close)}")
+
+            // 一、大盘
+            appendLine()
+            appendLine("【一、大盘环境】")
+            if (context.pulse.isEmpty()) {
+                appendLine("（这次没取到大盘行情，判断时请说明这一点，不要假装知道市场冷暖）")
+            } else {
+                appendLine(context.pulse.joinToString("  ") {
+                    "${it.name} ${String.format(Locale.US, "%.2f", it.price)} ${pct(it.percent)}"
+                })
+                val up = context.pulse.count { it.percent > 0 }
+                appendLine("6 个宽基里 ${up} 涨 ${context.pulse.size - up} 跌（只是指数样本，不是全市场涨跌家数）")
+            }
+
+            // 二、风格 / 板块
+            appendLine()
+            appendLine("【二、风格与板块】")
+            appendLine(
+                "标的自身：今日 " + pct(series.changeOver(1)) +
+                    "  近5日 " + pct(series.changeOver(5)) +
+                    "  近20日 " + pct(series.changeOver(20)) +
+                    "  近60日 " + pct(series.changeOver(60))
+            )
+            if (context.benchmark20 != null) {
+                appendLine("沪深300 近20日 " + pct(context.benchmark20))
+            }
+            if (context.relative20 != null) {
+                val tone = if (context.relative20 >= 0) "强于大盘" else "弱于大盘"
+                appendLine(
+                    "20日相对沪深300：" + String.format(Locale.US, "%+.2f", context.relative20) +
+                        " 个百分点（$tone）"
+                )
+            }
+            if (context.relatedFunds.isNotEmpty()) {
+                appendLine("跟踪这个指数的自选基金：" + context.relatedFunds.joinToString("、"))
+            }
+
+            // 三、个券
+            appendLine()
+            appendLine("【三、前十大重仓（成分）】")
+            if (context.constituents.isEmpty()) {
+                appendLine("（没有可用的持仓明细）")
+            } else {
+                appendLine(context.constituents.joinToString("  ") { (name, percent) -> "$name ${pct(percent)}" })
+            }
+
+            // 四、技术面
+            appendLine()
+            appendLine("【四、标的技术面】")
+            appendLine("最新价格/净值：" + String.format(Locale.US, "%.4f", latest.close))
             appendLine(
                 "均线：" + maValues.entries.joinToString("  ") { (period, value) ->
                     "MA$period=" + (value?.let { String.format(Locale.US, "%.4f", it) } ?: "无")
@@ -98,19 +150,52 @@ object AiAdvisor {
             )
             appendLine("现价相对MA20：" + (vsMa20?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "无"))
             appendLine(
+                "MACD(12,26,9)：DIF=" + (macd.latestDif?.let { String.format(Locale.US, "%+.4f", it) } ?: "无") +
+                    "  DEA=" + (macd.latestDea?.let { String.format(Locale.US, "%+.4f", it) } ?: "无") +
+                    "  柱=" + (macd.latestHist?.let { String.format(Locale.US, "%+.4f", it) } ?: "无") +
+                    "  前一根柱=" + (macd.previousHist?.let { String.format(Locale.US, "%+.4f", it) } ?: "无")
+            )
+            appendLine(
                 "布林带BOLL(20,2)：" +
                     "上轨=" + (bollUpper?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
                     "  中轨=" + (bollMiddle?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
                     "  下轨=" + (bollLower?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
                     (bollPosition?.let { String.format(Locale.US, "  带宽位置=%.0f%%", it) } ?: "")
             )
-            appendLine(
-                "区间涨跌：近5日=" + pct(series.changeOver(5)) +
-                    "  近20日=" + pct(series.changeOver(20)) +
-                    "  近60日=" + pct(series.changeOver(60))
-            )
             appendLine("最近10个交易日（日期 开高低收）：")
             append(recent)
+
+            // 五、账户
+            appendLine()
+            appendLine("【五、我的账户】")
+            if (context.accounts.isEmpty()) {
+                appendLine("这个指数相关的基金目前没有填写持仓（空仓，只需考虑买不买）")
+            } else {
+                context.accounts.forEach { line ->
+                    appendLine(
+                        "${line.fundName}（${line.fundCode}）：份额 " +
+                            String.format(Locale.US, "%.2f", line.shares) + "，成本价 " +
+                            String.format(Locale.US, "%.4f", line.avgCost) + "，市值 " +
+                            String.format(Locale.US, "%.2f", line.value) + "，浮动盈亏 " +
+                            String.format(Locale.US, "%+.2f", line.profit) +
+                            (line.profitPercent?.let { String.format(Locale.US, "（%+.2f%%）", it) } ?: "") +
+                            (line.today?.let { "，今日 " + String.format(Locale.US, "%+.2f", it) } ?: "") +
+                            (line.source.takeIf { it.isNotBlank() }?.let { "，估值来源 " + it } ?: "")
+                    )
+                }
+            }
+
+            // 六、事件与约束
+            appendLine()
+            appendLine("【六、事件与约束】")
+            if (context.events.isEmpty()) {
+                appendLine("没有特别的申购限制或事件")
+            } else {
+                context.events.forEach { appendLine("- " + it) }
+            }
+            if (context.missing.isNotEmpty()) {
+                appendLine("本次缺失的数据：" + context.missing.joinToString("、") + "（这些不要编造）")
+            }
         }
 
         val systemPrompt = "你是一名谨慎的基金波段交易助手。只能依据用户给出的数据判断，" +
@@ -120,10 +205,13 @@ object AiAdvisor {
             appendLine(dataBlock)
             appendLine()
             appendLine("请判断当前是否适合「波段买入」「波段卖出」或「观望」。要求：")
-            appendLine("1. 必须结合 MA5/MA10/MA20/MA60 的多空排列、价格与 MA20 的偏离程度、布林带上下轨位置、近期涨跌幅；")
-            appendLine("2. 场外基金申赎有确认延迟，判断应偏保守；")
-            appendLine("3. 只输出 JSON，不要 markdown 代码块，不要多余文字。")
-            append("""格式：{"action":"BUY|SELL|HOLD","confidence":0-100,"reason":"60字以内中文理由，需引用均线关系","risk":"30字以内风险提示"}""")
+            appendLine("1. 按 大盘 → 板块相对强弱 → 标的自身技术面 → 我的账户 的顺序逐层分析，不要只看均线；")
+            appendLine("2. 技术面必须同时看 MA5/10/20/60 的多空排列、MACD 的 DIF/DEA 位置与柱线缩短还是放大、布林带位置、近期涨跌幅；")
+            appendLine("3. 板块明显弱于沪深300 时，即使标的自身形态不错也要降低买入的置信度；")
+            appendLine("4. 结合我的成本：深套时不要简单劝割，浮盈时也要说明回撤风险；没有持仓就只判断该不该建仓；")
+            appendLine("5. 场外基金申赎有确认延迟，判断应偏保守；缺失的数据要明确说明，不要脑补；")
+            appendLine("6. 只输出 JSON，不要 markdown 代码块，不要多余文字。")
+            append("""格式：{"action":"BUY|SELL|HOLD","confidence":0-100,"reason":"80字以内中文理由，需说明大盘与板块的相对强弱","risk":"30字以内风险提示"}""")
         }
 
         val payload = JSONObject().apply {

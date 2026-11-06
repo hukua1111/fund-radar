@@ -79,6 +79,9 @@ fun FundDetailScreen(
     removeLabel: String = "从自选移除",
     /** 用户手动指定的跟踪指数，没有则为 null（按基金名自动识别）。 */
     trackOverride: IndexEntry? = null,
+    /** 自动识别/手动指定解析出来的指数，用来直接跳 K 线。 */
+    trackedIndex: IndexEntry? = null,
+    onOpenKline: (() -> Unit)? = null,
     onEditTrack: () -> Unit = {},
     onClearTrack: () -> Unit = {},
     /** 申购限额与基金档案只在限购页展示，持仓页不关心这些。 */
@@ -245,7 +248,29 @@ fun FundDetailScreen(
                         "估算净值",
                         estimate.nav?.let { navText(it) } ?: "—"
                     )
-                    DetailRow("估算依据", estimate.basis.ifBlank { estimate.sourceLabel })
+                    DetailRow("估算依据", estimate.sourceLabel)
+                    if (estimate.basis.isNotBlank() && estimate.source != EstimateSource.NAV) {
+                        DetailRow(
+                            label = when (estimate.source) {
+                                EstimateSource.INDEX -> "跟踪指数"
+                                EstimateSource.ETF -> "目标 ETF"
+                                EstimateSource.HOLDINGS -> "重仓样本"
+                                EstimateSource.NAV -> "净值日期"
+                            },
+                            value = estimate.basis
+                        )
+                    }
+                    if (estimate.source == EstimateSource.INDEX && estimate.etfCode.isNotBlank()) {
+                        // 指数是估算口径，ETF 摆在这里只作对照：两者的差就是
+                        // 场内溢价与费用，看久了心里有数。
+                        DetailRow(
+                            label = "目标 ETF",
+                            value = estimate.etfLabel + (
+                                estimate.etfPercent?.let { " · " + growthText(it) } ?: " · 无行情"
+                                ) + "（参考）",
+                            valueColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     if (estimate.quoteTime.isNotBlank()) {
                         DetailRow("行情时间", estimate.quoteTime)
                     }
@@ -303,7 +328,11 @@ fun FundDetailScreen(
                 DetailRow("基金标注", fund.trackIndex.ifBlank { "—" })
                 DetailRow(
                     label = "行情对应",
-                    value = trackOverride?.let { "${it.name}（${it.code}）" } ?: "按名称自动识别",
+                    value = when {
+                        trackOverride != null -> "${trackOverride.name}（${trackOverride.code}）"
+                        trackedIndex != null -> "${trackedIndex.name}（${trackedIndex.code}）"
+                        else -> "按名称自动识别"
+                    },
                     valueColor = if (trackOverride != null) {
                         MaterialTheme.colorScheme.primary
                     } else {
@@ -325,6 +354,17 @@ fun FundDetailScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Row {
+                if (trackedIndex != null && onOpenKline != null) {
+                    TextButton(
+                        onClick = onOpenKline,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 4.dp,
+                            vertical = 0.dp
+                        )
+                    ) {
+                        Text("看这个指数的 K 线", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
                 TextButton(
                     onClick = onEditTrack,
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(

@@ -38,6 +38,26 @@ data class BollingerBands(
     val lower: List<Double?> = emptyList()
 )
 
+/**
+ * MACD(12, 26, 9)：DIF 是快慢 EMA 差，DEA 是 DIF 的 EMA，柱状线是
+ * 2 ×（DIF − DEA），与国内行情软件的画法一致。
+ */
+data class Macd(
+    val fast: Int = 12,
+    val slow: Int = 26,
+    val signal: Int = 9,
+    val dif: List<Double?> = emptyList(),
+    val dea: List<Double?> = emptyList(),
+    val hist: List<Double?> = emptyList()
+) {
+    val latestDif: Double? get() = dif.lastOrNull()
+    val latestDea: Double? get() = dea.lastOrNull()
+    val latestHist: Double? get() = hist.lastOrNull()
+
+    /** 前一根柱子，用来判断今天是「红柱放大」还是「缩短」。 */
+    val previousHist: Double? get() = if (hist.size >= 2) hist[hist.size - 2] else null
+}
+
 data class KlineSeries(
     val code: String,
     val name: String,
@@ -55,6 +75,10 @@ data class KlineSeries(
     /** 布林带，默认 (20, 2)。 */
     fun boll(period: Int = 20, multiplier: Double = 2.0): BollingerBands =
         bollingerBands(candles.map { it.close }, period, multiplier)
+
+    /** MACD，默认 (12, 26, 9)。 */
+    fun macd(fast: Int = 12, slow: Int = 26, signal: Int = 9): Macd =
+        macd(candles.map { it.close }, fast, slow, signal)
 
     /** Percent change over the last [days] trading days. */
     fun changeOver(days: Int): Double? {
@@ -127,8 +151,53 @@ fun bollingerBands(
     return BollingerBands(period, multiplier, middle, upper, lower)
 }
 
-/** Compact price text: 4 decimals for NAV-style values, 3 for exchange prices. */
-fun priceText(value: Double): String =
+/**
+ * MACD：先算 EMA(快) 与 EMA(慢)，DIF = 快 − 慢，DEA = DIF 的 EMA，
+ * 柱 = 2 ×（DIF − DEA）。
+ *
+ * EMA 以第一个收盘价作种子逐个递推，所以序列头部会有「历史不足」的空档：
+ * DIF 从第 slow 根起有效，DEA 再晚 signal − 1 根。空档给 null，画图时跳过。
+ */
+fun macd(
+    values: List<Double>,
+    fast: Int = 12,
+    slow: Int = 26,
+    signal: Int = 9
+): Macd {
+    if (values.isEmpty()) return Macd(fast, slow, signal)
+    val fastEma = exponentialMovingAverage(values, fast)
+    val slowEma = exponentialMovingAverage(values, slow)
+
+    val rawDif = values.indices.map { fastEma[it] - slowEma[it] }
+    val rawDea = exponentialMovingAverage(rawDif, signal)
+
+    val dif = ArrayList<Double?>(values.size)
+    val dea = ArrayList<Double?>(values.size)
+    val hist = ArrayList<Double?>(values.size)
+    values.indices.forEach { index ->
+        val d = if (index >= slow - 1) rawDif[index] else null
+        val e = if (index >= slow + signal - 2) rawDea[index] else null
+        dif += d
+        dea += e
+        hist += if (d != null && e != null) (d - e) * 2 else null
+    }
+    return Macd(fast, slow, signal, dif, dea, hist)
+}
+
+/** 逐点 EMA：种子取第一个值，随后按 2 / (n + 1) 平滑。 */
+private fun exponentialMovingAverage(values: List<Double>, period: Int): List<Double> {
+    if (values.isEmpty()) return emptyList()
+    val alpha = 2.0 / (period + 1)
+    val result = ArrayList<Double>(values.size)
+    var previous = values.first()
+    values.forEach { value ->
+        previous = if (result.isEmpty()) value else alpha * value + (1 - alpha) * previous
+        result += previous
+    }
+    return result
+}
+
+/** Compact price text: 4 decimals for NAV-style values, 3 for exchange prices. */fun priceText(value: Double): String =
     if (value >= 100) String.format(Locale.US, "%.2f", value)
     else String.format(Locale.US, "%.4f", value)
 

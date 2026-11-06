@@ -4,6 +4,7 @@ import com.hukua.fundradar.data.Candle
 import com.hukua.fundradar.data.KlineSeries
 import com.hukua.fundradar.data.KlineSource
 import com.hukua.fundradar.data.bollingerBands
+import com.hukua.fundradar.data.macd
 import com.hukua.fundradar.data.movingAverage
 import com.hukua.fundradar.data.priceText
 import com.hukua.fundradar.data.volumeText
@@ -151,5 +152,55 @@ class KlineTest {
         assertEquals("860手", volumeText(860.0))
         assertEquals("12.3万手", volumeText(123_000.0))
         assertEquals("1.20亿手", volumeText(120_000_000.0))
+    }
+
+    @Test
+    fun macdStaysNullUntilEnoughHistory() {
+        val values = (1..40).map { it.toDouble() }
+        val result = macd(values)
+        // DIF 需要 26 根，DEA 再要 8 根
+        assertNull(result.dif[24])
+        assertTrue(result.dif[25] != null)
+        assertNull(result.dea[32])
+        assertTrue(result.dea[33] != null)
+        assertEquals(values.size, result.dif.size)
+    }
+
+    @Test
+    fun macdIsZeroOnFlatSeries() {
+        val result = macd(List(60) { 1.234 })
+        assertEquals(0.0, result.dif.last()!!, 1e-9)
+        assertEquals(0.0, result.dea.last()!!, 1e-9)
+        assertEquals(0.0, result.hist.last()!!, 1e-9)
+    }
+
+    @Test
+    fun macdTurnsPositiveOnSteadyRise() {
+        val rising = (1..80).map { it.toDouble() }
+        val result = macd(rising)
+        assertTrue(result.dif.last()!! > 0)
+        assertTrue(result.dea.last()!! > 0)
+        // 单边上涨里 DIF 一直在 DEA 上方，柱线为正
+        assertTrue(result.hist.last()!! > 0)
+        assertTrue(result.dif.last()!! > result.dea.last()!!)
+    }
+
+    @Test
+    fun macdHistEqualsDoubleTheGap() {
+        val values = (1..80).map { 10 + kotlin.math.sin(it / 3.0) * 2 }
+        val result = macd(values)
+        val index = values.lastIndex
+        assertEquals((result.dif[index]!! - result.dea[index]!!) * 2, result.hist[index]!!, 1e-9)
+    }
+
+    @Test
+    fun seriesMacdUsesClosingPrices() {
+        val data = series((1..60).map { it.toDouble() })
+        val result = data.macd()
+        assertEquals(12, result.fast)
+        assertEquals(26, result.slow)
+        assertEquals(9, result.signal)
+        assertTrue(result.latestDif != null)
+        assertTrue(result.latestHist != null)
     }
 }

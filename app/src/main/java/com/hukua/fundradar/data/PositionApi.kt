@@ -37,11 +37,17 @@ object PositionApi {
 
     suspend fun fetch(code: String): FundPosition? {
         val url = URL.format(code)
+        // 移动端 UA 是硬要求：桌面 UA 会被这个接口判成异常客户端，
+        // 返回 ErrCode 61136403，结果就是所有联接基金都拿不到目标 ETF。
         val body = runCatching {
-            Net.get(url, referer = "https://fund.eastmoney.com/")
+            Net.get(url, referer = "https://fund.eastmoney.com/", userAgent = Net.MOBILE_UA)
         }.getOrNull() ?: runCatching {
             // 个别网络会拦 HTTPS，退回 HTTP 再试一次。
-            Net.get(url.replaceFirst("https://", "http://"), referer = "https://fund.eastmoney.com/")
+            Net.get(
+                url.replaceFirst("https://", "http://"),
+                referer = "https://fund.eastmoney.com/",
+                userAgent = Net.MOBILE_UA
+            )
         }.getOrNull() ?: return null
         return parse(body)
     }

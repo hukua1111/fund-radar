@@ -5,15 +5,21 @@ import android.graphics.Canvas
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
+import androidx.compose.ui.unit.dp
 import com.hukua.fundradar.data.AiConfig
 import com.hukua.fundradar.data.AiVerdict
 import com.hukua.fundradar.data.Candle
 import com.hukua.fundradar.data.Estimate
 import com.hukua.fundradar.data.EstimateSource
 import com.hukua.fundradar.data.Fund
+import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.FundExtra
 import com.hukua.fundradar.data.Holding
 import com.hukua.fundradar.data.IndexEntry
@@ -23,20 +29,21 @@ import com.hukua.fundradar.data.KlineSource
 import com.hukua.fundradar.data.SwingAction
 import com.hukua.fundradar.data.TrackedIndex
 import com.hukua.fundradar.ui.AddIndexSheetContent
-import com.hukua.fundradar.ui.AppBottomBar
+import com.hukua.fundradar.ui.CostInput
 import com.hukua.fundradar.ui.DetailState
 import com.hukua.fundradar.ui.FundDetailScreen
+import com.hukua.fundradar.ui.FundRadarContent
+import com.hukua.fundradar.ui.FundUiState
 import com.hukua.fundradar.ui.HoldingMode
 import com.hukua.fundradar.ui.HoldingSheetContent
 import com.hukua.fundradar.ui.HoldingSheetState
 import com.hukua.fundradar.ui.IndexAddState
-import com.hukua.fundradar.ui.IndexContent
 import com.hukua.fundradar.ui.IndexItem
+import com.hukua.fundradar.ui.IndexStrip
 import com.hukua.fundradar.ui.IndexUiState
 import com.hukua.fundradar.ui.KlineContent
 import com.hukua.fundradar.ui.KlineUiState
 import com.hukua.fundradar.ui.SettingsContent
-import com.hukua.fundradar.ui.TAB_INDEX
 import com.hukua.fundradar.ui.TrackIndexSheetContent
 import com.hukua.fundradar.ui.TrackPickerState
 import com.hukua.fundradar.ui.theme.FundRadarTheme
@@ -120,34 +127,111 @@ class FeatureScreenshotTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
-    fun indexTab() {
+    @Config(qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun portfolioWithIndexStrip() {
+        // 指数并进持仓页之后的完整样子：概览卡 → 相关指数横滑条 → 基金卡。
+        val coal = Fund(
+            code = "008280",
+            name = "国泰中证煤炭ETF联接C",
+            type = "指数型-股票",
+            nav = 2.1532,
+            dayGrowth = -3.36,
+            buyStatus = "开放申购",
+            navDate = "2026-11-05",
+            trackIndex = "中证煤炭指数"
+        )
+        val liquor = Fund(
+            code = "161725",
+            name = "招商中证白酒指数(LOF)A",
+            type = "指数型-股票",
+            nav = 1.0412,
+            dayGrowth = -1.02,
+            buyStatus = "开放申购",
+            navDate = "2026-11-05",
+            trackIndex = "中证白酒指数"
+        )
+        val funds = listOf(coal, liquor)
         compose.setContent {
             FundRadarTheme(darkTheme = false) {
-                IndexContent(
-                    state = sampleIndexState(),
-                    bottomBar = { AppBottomBar(selected = TAB_INDEX, onSelect = {}) }
+                FundRadarContent(
+                    state = FundUiState(
+                        all = funds,
+                        visible = funds,
+                        scope = FundScope.PORTFOLIO,
+                        loading = false,
+                        watchlistEmpty = false,
+                        estimates = mapOf(
+                            coal.code to Estimate(
+                                percent = -3.21,
+                                nav = 2.0841,
+                                source = EstimateSource.INDEX,
+                                basis = "中证煤炭",
+                                quoteTime = "11-06 14:02",
+                                etfCode = "515220",
+                                etfName = "煤炭ETF国泰",
+                                etfPercent = -3.14
+                            ),
+                            liquor.code to Estimate(
+                                percent = -1.18,
+                                nav = 1.0289,
+                                source = EstimateSource.INDEX,
+                                basis = "中证白酒",
+                                quoteTime = "11-06 14:02"
+                            )
+                        ),
+                        holdings = mapOf(
+                            coal.code to Holding(shares = 702.97, cost = 1602.42),
+                            liquor.code to Holding(shares = 3000.0, cost = 3120.0)
+                        )
+                    ),
+                    indices = sampleIndexState()
                 )
             }
         }
         compose.waitForIdle()
-        save("index-tab")
-        dump("tree-index.txt")
+        save("portfolio-indices")
+        dump("tree-portfolio-indices.txt")
     }
 
     @Test
     @Config(qualifiers = "w411dp-h891dp-xxhdpi")
-    fun indexTabEmpty() {
+    fun indexStrip() {
         compose.setContent {
             FundRadarTheme(darkTheme = false) {
-                IndexContent(
-                    state = IndexUiState(loading = false, watchlistEmpty = true),
-                    bottomBar = { AppBottomBar(selected = TAB_INDEX, onSelect = {}) }
-                )
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    IndexStrip(
+                        state = sampleIndexState(),
+                        onOpenKline = { _, _ -> },
+                        onAddClick = {},
+                        onRemove = {},
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
             }
         }
         compose.waitForIdle()
-        save("index-empty")
+        save("index-strip")
+        dump("tree-index-strip.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun indexStripEmpty() {
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    IndexStrip(
+                        state = IndexUiState(loading = false, watchlistEmpty = true),
+                        onOpenKline = { _, _ -> },
+                        onAddClick = {},
+                        onRemove = {},
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
+        }
+        compose.waitForIdle()
+        save("index-strip-empty")
     }
 
     @Test
@@ -286,9 +370,60 @@ class FeatureScreenshotTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
-    fun holdingSheet() {
+    @Config(qualifiers = "w411dp-h1200dp-xxhdpi")
+    fun fundDetailEtfEstimate() {
+        // 指数优先之后，联接基金的详情页也要把目标 ETF 摆出来当对照。
+        val fund = Fund(
+            code = "008280",
+            name = "国泰中证煤炭ETF联接C",
+            type = "指数型-股票",
+            nav = 2.1532,
+            accNav = 2.1532,
+            dayGrowth = -3.36,
+            buyStatus = "开放申购",
+            sellStatus = "开放赎回",
+            minBuy = 10.0,
+            maxBuy = 500_000.0,
+            rate = "0.00%",
+            sourceRate = "0.00%",
+            riskLevel = 4,
+            navDate = "2026-11-05",
+            trackIndex = "中证煤炭指数"
+        )
         compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                FundDetailScreen(
+                    state = DetailState.Ready(fund, null),
+                    onBack = {},
+                    estimate = Estimate(
+                        percent = -3.21,
+                        nav = 2.0841,
+                        source = EstimateSource.INDEX,
+                        basis = "中证煤炭",
+                        quoteTime = "11-06 14:02",
+                        etfCode = "515220",
+                        etfName = "煤炭ETF国泰",
+                        etfPercent = -3.14
+                    ),
+                    showLimitBadge = false,
+                    removeLabel = "从持仓移除",
+                    showFundFacts = false,
+                    holding = Holding(
+                        shares = 702.97,
+                        cost = 1602.42,
+                        realized = 0.0
+                    )
+                )
+            }
+        }
+        compose.waitForIdle()
+        save("fund-detail-index")
+        dump("tree-fund-detail-index.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun holdingSheet() {        compose.setContent {
             FundRadarTheme(darkTheme = false) {
                 androidx.compose.material3.Surface(
                     color = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerLow
@@ -330,12 +465,14 @@ class FeatureScreenshotTest {
                     HoldingSheetContent(
                         state = HoldingSheetState(
                             open = true,
-                            fundCode = "025833",
-                            fundName = "天弘电网设备特高压指数C",
+                            fundCode = "008280",
+                            fundName = "国泰中证煤炭ETF联接C",
                             mode = HoldingMode.EDIT,
-                            shares = "12000",
-                            cost = "11800",
-                            current = Holding(shares = 12000.0, cost = 11800.0)
+                            shares = "702.97",
+                            cost = "2.2795",
+                            costInput = CostInput.PRICE,
+                            nav = "2.1532",
+                            current = Holding(shares = 702.97, cost = 1602.42)
                         ),
                         onModeChange = {},
                         onSharesChange = {},
