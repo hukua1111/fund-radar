@@ -221,8 +221,9 @@ fun SettingsContent(
 
             SectionCard(
                 title = "估值数据源自检",
-                subtitle = "盘中估算要连过「基金持仓 → 交易所行情 → 标的指数」三关，" +
-                    "这里把每一步的真实返回摊开，出问题一眼看出卡在哪"
+                subtitle = "估算的主口径是跟踪指数，其次才是目标 ETF。" +
+                    "这里按「跟踪指数 → 基金持仓 → 腾讯/东财行情」把每一步的真实返回摊开，" +
+                    "出问题一眼看出卡在哪"
             ) {
                 TextButton(enabled = !checking, onClick = onCheck) {
                     if (checking) {
