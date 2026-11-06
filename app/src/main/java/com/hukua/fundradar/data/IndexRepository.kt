@@ -35,6 +35,7 @@ class IndexRepository(context: Context) {
     private val appContext = context.applicationContext
     private val funds = FundRepository(appContext)
     private val manual = IndexWatchStore(appContext)
+    private val overrides = TrackOverrideStore(appContext)
 
     suspend fun tracked(): TrackedResult = withContext(Dispatchers.IO) {
         val manualItems = manual.entries().map {
@@ -48,8 +49,16 @@ class IndexRepository(context: Context) {
 
         val catalog = IndexCatalog.load(appContext)
 
+        // 手动指定过的基金不再参与名字匹配：用户的选择优先于自动识别。
+        val pinned = LinkedHashMap<String, Pair<IndexEntry, MutableList<String>>>()
         val byName = LinkedHashMap<String, MutableList<String>>()
+        val assigned = overrides.all()
         watchlist.forEach { fund ->
+            val chosen = assigned[fund.code]
+            if (chosen != null) {
+                pinned.getOrPut(chosen.secid) { chosen to mutableListOf() }.second += fund.code
+                return@forEach
+            }
             val tracked = fund.trackIndex.trim()
             if (tracked.isBlank()) return@forEach
             byName.getOrPut(tracked) { mutableListOf() }.add(fund.code)
@@ -68,6 +77,15 @@ class IndexRepository(context: Context) {
         }
 
         val merged = LinkedHashMap<String, TrackedIndex>()
+        pinned.forEach { (secid, pair) ->
+            merged[secid] = TrackedIndex(
+                entry = pair.first,
+                trackedName = MANUAL_LABEL,
+                fundCodes = pair.second.distinct(),
+                overridden = true
+            )
+        }
+
         val unresolved = ArrayList<String>()
         resolved.forEach { (name, codes, entry) ->
             if (entry == null) {
@@ -112,6 +130,26 @@ class IndexRepository(context: Context) {
     fun isManual(secid: String): Boolean = manual.contains(secid)
 
     fun removeIndex(secid: String) = manual.remove(secid)
+
+    // ------------------------------------------------ 跟踪标的手动指定
+
+    /** 所有手动指定的「基金 → 指数」。 */
+    fun trackOverrides(): Map<String, IndexEntry> = overrides.all()
+
+    fun trackOverride(fundCode: String): IndexEntry? = overrides.get(fundCode)
+
+    /**
+     * 把基金的行情来源钉在指定的指数上。之后 [tracked] 不再尝试用基金名去
+     * 匹配，避免「名字差一个字就整只基金消失」。
+     */
+    fun assignTrack(fundCode: String, entry: IndexEntry) {
+        if (fundCode.isBlank()) return
+        overrides.set(fundCode, entry)
+    }
+
+    fun clearTrack(fundCode: String) {
+        overrides.clear(fundCode)
+    }
 
     /**
      * Validates the index against the quote endpoint before saving it, so the

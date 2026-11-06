@@ -12,8 +12,8 @@ android {
         applicationId = "com.hukua.fundradar"
         minSdk = 24
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.4.0"
+        versionCode = 7
+        versionName = "1.5.0"
         vectorDrawables.useSupportLibrary = true
     }
 

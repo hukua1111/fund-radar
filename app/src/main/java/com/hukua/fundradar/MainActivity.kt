@@ -28,6 +28,7 @@ import com.hukua.fundradar.ui.SettingsScreen
 import com.hukua.fundradar.ui.TAB_INDEX
 import com.hukua.fundradar.ui.TAB_LIMIT
 import com.hukua.fundradar.ui.TAB_PORTFOLIO
+import com.hukua.fundradar.ui.TrackIndexSheet
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import com.hukua.fundradar.work.DailyScheduler
 
@@ -56,6 +57,9 @@ class MainActivity : ComponentActivity() {
                 val portfolioDetail by portfolioViewModel.detail.collectAsStateWithLifecycle()
                 val limitDetail by limitViewModel.detail.collectAsStateWithLifecycle()
                 val portfolioState by portfolioViewModel.state.collectAsStateWithLifecycle()
+                val limitState by limitViewModel.state.collectAsStateWithLifecycle()
+                val portfolioTrackPicker by portfolioViewModel.trackPicker.collectAsStateWithLifecycle()
+                val limitTrackPicker by limitViewModel.trackPicker.collectAsStateWithLifecycle()
 
                 var route by rememberSaveable { mutableStateOf("list") }
                 var tab by rememberSaveable { mutableStateOf(TAB_PORTFOLIO) }
@@ -119,6 +123,9 @@ class MainActivity : ComponentActivity() {
                             // selection): nothing to show, fall back.
                             LaunchedEffect(Unit) { route = "list" }
                         } else {
+                            val overrides = if (isLimitTab) limitState.overrides else portfolioState.overrides
+                            val picker = if (isLimitTab) limitTrackPicker else portfolioTrackPicker
+
                             FundDetailScreen(
                                 state = state,
                                 onBack = backToList,
@@ -132,8 +139,25 @@ class MainActivity : ComponentActivity() {
                                     portfolioState.estimates[state.fund.code]
                                 },
                                 showLimitBadge = isLimitTab,
-                                removeLabel = if (isLimitTab) "从限购清单移除" else "从持仓移除"
+                                removeLabel = if (isLimitTab) "从限购清单移除" else "从持仓移除",
+                                trackOverride = overrides[state.fund.code],
+                                onEditTrack = { activeViewModel.openTrackPicker(state.fund) },
+                                onClearTrack = { activeViewModel.clearTrack(state.fund.code) }
                             )
+
+                            if (picker.open) {
+                                TrackIndexSheet(
+                                    state = picker,
+                                    onQueryChange = activeViewModel::onTrackQueryChange,
+                                    onPick = activeViewModel::assignTrack,
+                                    onClearCurrent = {
+                                        val code = picker.fundCode
+                                        activeViewModel.closeTrackPicker()
+                                        activeViewModel.clearTrack(code)
+                                    },
+                                    onDismiss = activeViewModel::closeTrackPicker
+                                )
+                            }
                         }
                     }
 

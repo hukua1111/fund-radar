@@ -23,7 +23,9 @@ data class TrackedIndex(
     val trackedName: String,
     val fundCodes: List<String> = emptyList(),
     /** True when the row was added by hand on the 指数 tab. */
-    val manual: Boolean = false
+    val manual: Boolean = false,
+    /** 跟踪标的是用户在基金详情里手动指定的，不是名字自动匹配出来的。 */
+    val overridden: Boolean = false
 )
 
 private val PREFIXES = listOf("中证全指", "中证", "国证", "深证", "上证", "沪深")

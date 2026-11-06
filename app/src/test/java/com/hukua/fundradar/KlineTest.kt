@@ -3,8 +3,10 @@ package com.hukua.fundradar
 import com.hukua.fundradar.data.Candle
 import com.hukua.fundradar.data.KlineSeries
 import com.hukua.fundradar.data.KlineSource
+import com.hukua.fundradar.data.bollingerBands
 import com.hukua.fundradar.data.movingAverage
 import com.hukua.fundradar.data.priceText
+import com.hukua.fundradar.data.volumeText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -89,5 +91,65 @@ class KlineTest {
     fun priceTextKeepsEnoughDecimals() {
         assertEquals("0.5926", priceText(0.5926))
         assertEquals("128.40", priceText(128.4))
+    }
+
+    @Test
+    fun bollingerMiddleIsTheMovingAverage() {
+        val values = (1..40).map { it.toDouble() }
+        val band = bollingerBands(values, 20, 2.0)
+        assertEquals(values.size, band.middle.size)
+        assertEquals(movingAverage(values, 20), band.middle)
+        assertNull(band.upper[18])
+        assertNull(band.lower[18])
+        assertTrue(band.upper.drop(19).all { it != null })
+    }
+
+    @Test
+    fun bollingerMatchesManualStandardDeviation() {
+        val values = (1..20).map { it.toDouble() }
+        val band = bollingerBands(values, 20, 2.0)
+        val mean = 10.5
+        val deviation = kotlin.math.sqrt(values.sumOf { (it - mean) * (it - mean) } / 20.0)
+        assertEquals(mean, band.middle.last()!!, 1e-9)
+        assertEquals(mean + 2 * deviation, band.upper.last()!!, 1e-9)
+        assertEquals(mean - 2 * deviation, band.lower.last()!!, 1e-9)
+        assertTrue(band.upper.last()!! > band.middle.last()!!)
+        assertTrue(band.lower.last()!! < band.middle.last()!!)
+    }
+
+    @Test
+    fun bollingerCollapsesOnFlatSeries() {
+        val values = List(30) { 3.5 }
+        val band = bollingerBands(values, 20, 2.0)
+        assertEquals(3.5, band.middle.last()!!, 1e-9)
+        assertEquals(3.5, band.upper.last()!!, 1e-9)
+        assertEquals(3.5, band.lower.last()!!, 1e-9)
+    }
+
+    @Test
+    fun bollingerRespectsMultiplier() {
+        val values = (1..20).map { it.toDouble() }
+        val narrow = bollingerBands(values, 20, 1.0)
+        val wide = bollingerBands(values, 20, 2.0)
+        val narrowWidth = narrow.upper.last()!! - narrow.lower.last()!!
+        val wideWidth = wide.upper.last()!! - wide.lower.last()!!
+        assertEquals(narrowWidth * 2, wideWidth, 1e-9)
+    }
+
+    @Test
+    fun seriesBollUsesClosingPrices() {
+        val data = series((1..30).map { it.toDouble() })
+        val band = data.boll()
+        assertEquals(20, band.period)
+        assertEquals(2.0, band.multiplier, 1e-9)
+        assertEquals((11.0 + 30.0) / 2.0, band.middle.last()!!, 1e-9)
+    }
+
+    @Test
+    fun volumeTextScalesByMagnitude() {
+        assertEquals("—", volumeText(0.0))
+        assertEquals("860手", volumeText(860.0))
+        assertEquals("12.3万手", volumeText(123_000.0))
+        assertEquals("1.20亿手", volumeText(120_000_000.0))
     }
 }

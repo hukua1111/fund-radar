@@ -12,6 +12,8 @@ import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundExtra
 import com.hukua.fundradar.data.FundRepository
 import com.hukua.fundradar.data.FundScope
+import com.hukua.fundradar.data.IndexEntry
+import com.hukua.fundradar.data.IndexRepository
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.data.LimitType
 import kotlinx.coroutines.Job
@@ -53,7 +55,9 @@ data class FundUiState(
     /** Intraday estimates, keyed by fund code. Portfolio only. */
     val estimates: Map<String, Estimate> = emptyMap(),
     val estimatesLoading: Boolean = false,
-    val estimatesAt: Long = 0L
+    val estimatesAt: Long = 0L,
+    /** 用户手动指定的「基金 → 指数」，覆盖按名字自动匹配。 */
+    val overrides: Map<String, IndexEntry> = emptyMap()
 ) {
     val limitedCount: Int get() = all.count { it.limitType == LimitType.LIMITED }
     val suspendedCount: Int get() = all.count { it.limitType == LimitType.SUSPENDED }
@@ -84,9 +88,23 @@ sealed interface DetailState {
     data class Ready(override val fund: Fund, val extra: FundExtra?) : DetailState
 }
 
+/** 「指定跟踪指数」底部弹层的状态。 */
+data class TrackPickerState(
+    val open: Boolean = false,
+    val fundCode: String = "",
+    val fundName: String = "",
+    val query: String = "",
+    val searching: Boolean = false,
+    val results: List<IndexEntry> = emptyList(),
+    val message: String? = null,
+    /** 当前已经手动指定的指数，没有则为 null。 */
+    val current: IndexEntry? = null
+)
+
 class FundViewModel(
     private val repository: FundRepository,
-    private val estimateRepository: EstimateRepository
+    private val estimateRepository: EstimateRepository,
+    private val indexRepository: IndexRepository
 ) : ViewModel() {
 
     val scope: FundScope get() = repository.scope
@@ -94,7 +112,8 @@ class FundViewModel(
     private val _state = MutableStateFlow(
         FundUiState(
             scope = repository.scope,
-            watchlistEmpty = repository.codes().isEmpty()
+            watchlistEmpty = repository.codes().isEmpty(),
+            overrides = indexRepository.trackOverrides()
         )
     )
     val state: StateFlow<FundUiState> = _state.asStateFlow()
@@ -105,9 +124,14 @@ class FundViewModel(
     private val _detail = MutableStateFlow<DetailState?>(null)
     val detail: StateFlow<DetailState?> = _detail.asStateFlow()
 
+    private val _trackPicker = MutableStateFlow(TrackPickerState())
+    val trackPicker: StateFlow<TrackPickerState> = _trackPicker.asStateFlow()
+
     private var searchJob: Job? = null
     private var estimateJob: Job? = null
+    private var trackJob: Job? = null
     private var searchSeq = 0
+    private var trackSeq = 0
 
     init {
         load(force = false)
@@ -167,12 +191,14 @@ class FundViewModel(
 
     fun removeFund(code: String) {
         repository.remove(code)
+        indexRepository.clearTrack(code)
         _detail.value = null
         _state.update { current ->
             current.copy(
                 all = current.all.filterNot { it.code == code },
                 changes = current.changes.filterNot { it.code == code },
                 estimates = current.estimates - code,
+                overrides = current.overrides - code,
                 watchlistEmpty = repository.codes().isEmpty()
             ).derive()
         }
@@ -234,6 +260,55 @@ class FundViewModel(
         _detail.value = null
     }
 
+    // ------------------------------------------------ 跟踪标的手动指定
+
+    fun openTrackPicker(fund: Fund) {
+        _trackPicker.value = TrackPickerState(
+            open = true,
+            fundCode = fund.code,
+            fundName = fund.name,
+            current = indexRepository.trackOverride(fund.code)
+        )
+    }
+
+    fun closeTrackPicker() {
+        trackSeq++
+        trackJob?.cancel()
+        _trackPicker.value = TrackPickerState()
+    }
+
+    fun onTrackQueryChange(query: String) {
+        _trackPicker.update { it.copy(query = query, message = null) }
+        trackJob?.cancel()
+        val seq = ++trackSeq
+        if (query.isBlank()) {
+            _trackPicker.update { it.copy(results = emptyList(), searching = false) }
+            return
+        }
+        trackJob = viewModelScope.launch {
+            delay(350)
+            _trackPicker.update { it.copy(searching = true) }
+            val results = indexRepository.search(query.trim())
+            if (seq == trackSeq) {
+                _trackPicker.update { it.copy(searching = false, results = results) }
+            }
+        }
+    }
+
+    /** 保存选择：这只基金之后的指数行情就取这个标的。 */
+    fun assignTrack(entry: IndexEntry) {
+        val target = _trackPicker.value
+        if (target.fundCode.isBlank()) return
+        indexRepository.assignTrack(target.fundCode, entry)
+        _state.update { it.copy(overrides = indexRepository.trackOverrides()) }
+        closeTrackPicker()
+    }
+
+    fun clearTrack(fundCode: String) {
+        indexRepository.clearTrack(fundCode)
+        _state.update { it.copy(overrides = indexRepository.trackOverrides()) }
+    }
+
     fun consumeError() {
         _state.update { it.copy(error = null) }
     }
@@ -266,7 +341,8 @@ class FundViewModel(
                             fromCache = result.fromCache,
                             error = null,
                             watchlistEmpty = codes.isEmpty(),
-                            changes = result.changes
+                            changes = result.changes,
+                            overrides = indexRepository.trackOverrides()
                         ).derive()
                     }
                     if (scope.isPortfolio) refreshEstimates()
@@ -289,7 +365,8 @@ class FundViewModel(
                 initializer {
                     FundViewModel(
                         repository = FundRepository(context.applicationContext, scope),
-                        estimateRepository = EstimateRepository(context.applicationContext)
+                        estimateRepository = EstimateRepository(context.applicationContext),
+                        indexRepository = IndexRepository(context.applicationContext)
                     )
                 }
             }

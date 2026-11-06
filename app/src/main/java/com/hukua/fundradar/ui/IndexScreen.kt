@@ -63,7 +63,7 @@ import com.hukua.fundradar.data.priceText
 import com.hukua.fundradar.ui.theme.LocalMarketColors
 
 /** Handy indices shown before the user types anything. */
-private val INDEX_SUGGESTIONS = listOf(
+internal val INDEX_SUGGESTIONS = listOf(
     IndexEntry("399997", 0, "中证白酒"),
     IndexEntry("000300", 1, "沪深300"),
     IndexEntry("000905", 1, "中证500"),
@@ -229,7 +229,7 @@ fun IndexContent(
                                     Text(
                                         text = "另有 ${state.unresolved.size} 只基金跟踪的「" +
                                             state.unresolved.joinToString("、").take(28) +
-                                            "」没有找到可用代码，可在右上角 ＋ 里手动搜索添加。",
+                                            "」没能自动对上指数，可以在基金详情里手动指定，或点右上角 ＋ 添加。",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -289,10 +289,11 @@ private fun IndexCard(item: IndexItem, onClick: () -> Unit, onRemove: (() -> Uni
                             append(item.tracked.entry.code)
                             append("  ·  ")
                             append(
-                                if (item.tracked.manual) {
-                                    "手动添加"
-                                } else {
-                                    "${item.tracked.fundCodes.size} 只基金跟踪"
+                                when {
+                                    item.tracked.manual -> "手动添加"
+                                    item.tracked.overridden ->
+                                        "手动指定 · ${item.tracked.fundCodes.size} 只基金"
+                                    else -> "${item.tracked.fundCodes.size} 只基金跟踪"
                                 }
                             )
                         },
@@ -322,7 +323,11 @@ private fun IndexCard(item: IndexItem, onClick: () -> Unit, onRemove: (() -> Uni
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = if (item.tracked.manual) "不随自选基金变化" else item.tracked.trackedName,
+                    text = when {
+                        item.tracked.manual -> "不随自选基金变化"
+                        item.tracked.overridden -> "跟踪标的由你在基金详情里指定"
+                        else -> item.tracked.trackedName
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -554,7 +559,7 @@ private fun AddIndexRow(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                text = "${entry.code}  ·  " + if (entry.market == 1) "沪市" else "深市",
+                text = "${entry.code}  ·  " + marketLabel(entry.market),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import com.hukua.fundradar.data.Estimate
 import com.hukua.fundradar.data.EstimateSource
 import com.hukua.fundradar.data.Fund
+import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.growthText
 import com.hukua.fundradar.data.money
 import com.hukua.fundradar.data.navText
@@ -61,7 +62,11 @@ fun FundDetailScreen(
     /** Intraday estimate, portfolio page only. */
     estimate: Estimate? = null,
     showLimitBadge: Boolean = true,
-    removeLabel: String = "从自选移除"
+    removeLabel: String = "从自选移除",
+    /** 用户手动指定的跟踪指数，没有则为 null（按基金名自动识别）。 */
+    trackOverride: IndexEntry? = null,
+    onEditTrack: () -> Unit = {},
+    onClearTrack: () -> Unit = {}
 ) {
     val fund = state.fund
     val extra = (state as? DetailState.Ready)?.extra
@@ -235,17 +240,60 @@ fun FundDetailScreen(
                 }
             }
 
-            if (fund.trackIndex.isNotBlank()) {
-                SectionTitle("跟踪标的")
-                DetailCard {
-                    DetailRow("标的指数", fund.trackIndex)
-                }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "该指数可在「指数」页查看，没有的话点右上角 ＋ 手动添加",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+            SectionTitle("跟踪标的")
+            DetailCard {
+                DetailRow("基金标注", fund.trackIndex.ifBlank { "—" })
+                DetailRow(
+                    label = "行情对应",
+                    value = trackOverride?.let { "${it.name}（${it.code}）" } ?: "按名称自动识别",
+                    valueColor = if (trackOverride != null) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
                 )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = when {
+                    trackOverride != null ->
+                        "指数页里这只基金的标的已经锁定在上面这个指数，同名不同源的指数不会再串。"
+                    fund.trackIndex.isNotBlank() ->
+                        "基金标注的名字和行情里的指数简称常常差几个字，自动对不上时点下面的按钮手动挑一个。"
+                    else ->
+                        "这只基金没有标注跟踪标的，可以手动指定一个指数作为参照。"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row {
+                TextButton(
+                    onClick = onEditTrack,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 4.dp,
+                        vertical = 0.dp
+                    )
+                ) {
+                    Text(
+                        text = if (trackOverride == null) "手动指定指数" else "更换指定指数",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+                if (trackOverride != null) {
+                    TextButton(
+                        onClick = onClearTrack,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 12.dp,
+                            vertical = 0.dp
+                        )
+                    ) {
+                        Text(
+                            text = "恢复自动识别",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.height(24.dp))

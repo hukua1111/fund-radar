@@ -33,6 +33,8 @@ import com.hukua.fundradar.ui.KlineContent
 import com.hukua.fundradar.ui.KlineUiState
 import com.hukua.fundradar.ui.SettingsContent
 import com.hukua.fundradar.ui.TAB_INDEX
+import com.hukua.fundradar.ui.TrackIndexSheetContent
+import com.hukua.fundradar.ui.TrackPickerState
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import org.junit.Rule
 import org.junit.Test
@@ -43,6 +45,7 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.time.DayOfWeek
 import java.time.LocalDate
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -219,6 +222,71 @@ class FeatureScreenshotTest {
         dump("tree-fund-detail.txt")
     }
 
+    @Test
+    @Config(qualifiers = "w411dp-h1200dp-xxhdpi")
+    fun fundDetailWithTrackOverride() {
+        val fund = Fund(
+            code = "025833",
+            name = "天弘电网设备特高压指数C",
+            type = "指数型-股票",
+            nav = 1.0188,
+            accNav = 1.0188,
+            dayGrowth = 1.85,
+            buyStatus = "开放申购",
+            sellStatus = "开放赎回",
+            minBuy = 10.0,
+            rate = "0.00%",
+            sourceRate = "1.20%",
+            riskLevel = 4,
+            navDate = "2026-11-05",
+            trackIndex = "中证电网设备主题指数"
+        )
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                FundDetailScreen(
+                    state = DetailState.Ready(fund, null),
+                    onBack = {},
+                    showLimitBadge = false,
+                    removeLabel = "从持仓移除",
+                    trackOverride = IndexEntry("931994", 2, "中证电网设备主题"),
+                    onEditTrack = {},
+                    onClearTrack = {}
+                )
+            }
+        }
+        compose.waitForIdle()
+        save("fund-detail-track")
+        dump("tree-fund-detail-track.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
+    fun trackIndexSheet() {
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                TrackIndexSheetContent(
+                    state = TrackPickerState(
+                        open = true,
+                        fundCode = "025833",
+                        fundName = "天弘电网设备特高压指数C",
+                        query = "电网",
+                        results = listOf(
+                            IndexEntry("931994", 2, "中证电网设备主题"),
+                            IndexEntry("931008", 2, "中证电网设备")
+                        ),
+                        current = IndexEntry("931994", 2, "中证电网设备主题")
+                    ),
+                    onQueryChange = {},
+                    onPick = {},
+                    onClearCurrent = {}
+                )
+            }
+        }
+        compose.waitForIdle()
+        save("track-picker")
+        dump("tree-track-picker.txt")
+    }
+
     private fun sampleIndexState(): IndexUiState {
         val coal = IndexEntry("399998", 0, "中证煤炭")
         val liquor = IndexEntry("399997", 0, "中证白酒")
@@ -236,7 +304,12 @@ class FeatureScreenshotTest {
                     quote = IndexQuote(liquor, 8941.20, -1.27, "2026-11-05")
                 ),
                 IndexItem(
-                    tracked = TrackedIndex(semi, "国证半导体芯片指数", listOf("008888")),
+                    tracked = TrackedIndex(
+                        semi,
+                        "国证半导体芯片指数",
+                        listOf("008888"),
+                        overridden = true
+                    ),
                     quote = IndexQuote(semi, 6120.55, 0.0, "2026-11-05")
                 ),
                 IndexItem(
@@ -288,7 +361,7 @@ class FeatureScreenshotTest {
                 close = close,
                 high = maxOf(open, close) + 0.006,
                 low = minOf(open, close) - 0.006,
-                volume = 1_000_000.0
+                volume = 900_000.0 + 620_000.0 * abs(sin(index / 7.0))
             )
         }
         return KlineSeries("161725", "招商中证白酒指数(LOF)A", KlineSource.EXCHANGE, candles)

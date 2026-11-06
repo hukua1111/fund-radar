@@ -68,6 +68,15 @@ object AiAdvisor {
         val maValues = series.maValues()
         val ma20 = maValues[20]
         val vsMa20 = ma20?.takeIf { it > 0 }?.let { (latest.close - it) / it * 100.0 }
+        val boll = series.boll()
+        val bollUpper = boll.upper.lastOrNull()
+        val bollMiddle = boll.middle.lastOrNull()
+        val bollLower = boll.lower.lastOrNull()
+        val bollPosition = if (bollUpper != null && bollLower != null && bollUpper > bollLower) {
+            ((latest.close - bollLower) / (bollUpper - bollLower) * 100).coerceIn(0.0, 100.0)
+        } else {
+            null
+        }
 
         val recent = series.candles.takeLast(10).joinToString("\n") { candle ->
             String.format(
@@ -89,6 +98,13 @@ object AiAdvisor {
             )
             appendLine("现价相对MA20：" + (vsMa20?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "无"))
             appendLine(
+                "布林带BOLL(20,2)：" +
+                    "上轨=" + (bollUpper?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
+                    "  中轨=" + (bollMiddle?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
+                    "  下轨=" + (bollLower?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
+                    (bollPosition?.let { String.format(Locale.US, "  带宽位置=%.0f%%", it) } ?: "")
+            )
+            appendLine(
                 "区间涨跌：近5日=" + pct(series.changeOver(5)) +
                     "  近20日=" + pct(series.changeOver(20)) +
                     "  近60日=" + pct(series.changeOver(60))
@@ -104,7 +120,7 @@ object AiAdvisor {
             appendLine(dataBlock)
             appendLine()
             appendLine("请判断当前是否适合「波段买入」「波段卖出」或「观望」。要求：")
-            appendLine("1. 必须结合 MA5/MA10/MA20/MA60 的多空排列、价格与 MA20 的偏离程度、近期涨跌幅；")
+            appendLine("1. 必须结合 MA5/MA10/MA20/MA60 的多空排列、价格与 MA20 的偏离程度、布林带上下轨位置、近期涨跌幅；")
             appendLine("2. 场外基金申赎有确认延迟，判断应偏保守；")
             appendLine("3. 只输出 JSON，不要 markdown 代码块，不要多余文字。")
             append("""格式：{"action":"BUY|SELL|HOLD","confidence":0-100,"reason":"60字以内中文理由，需引用均线关系","risk":"30字以内风险提示"}""")
@@ -171,6 +187,12 @@ object AiAdvisor {
                     ma.entries.joinToString("  ") { (period, value) ->
                         "MA$period=" + (value?.let { String.format(Locale.US, "%.4f", it) } ?: "无")
                     }
+                )
+                val band = item.series.boll()
+                appendLine(
+                    "BOLL(20,2) 上=" + (band.upper.lastOrNull()?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
+                        " 中=" + (band.middle.lastOrNull()?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
+                        " 下=" + (band.lower.lastOrNull()?.let { String.format(Locale.US, "%.4f", it) } ?: "无")
                 )
                 append(
                     "近5日=${pct(item.series.changeOver(5))}  近20日=${pct(item.series.changeOver(20))}  " +
