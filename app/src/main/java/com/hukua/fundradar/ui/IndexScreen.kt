@@ -224,12 +224,24 @@ fun IndexContent(
                             )
                         }
                         item(key = "footer") {
-                            Text(
-                                text = "指数行情来自东方财富公开数据，K 线与均线由本地计算。" +
-                                    if (state.manualCount > 0) " 其中 ${state.manualCount} 只是手动添加。" else "",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column {
+                                if (state.unresolved.isNotEmpty()) {
+                                    Text(
+                                        text = "另有 ${state.unresolved.size} 只基金跟踪的「" +
+                                            state.unresolved.joinToString("、").take(28) +
+                                            "」没有找到可用代码，可在右上角 ＋ 里手动搜索添加。",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.height(6.dp))
+                                }
+                                Text(
+                                    text = "指数行情来自东方财富公开数据，K 线与均线由本地计算。" +
+                                        if (state.manualCount > 0) " 其中 ${state.manualCount} 只是手动添加。" else "",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }

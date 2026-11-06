@@ -102,6 +102,7 @@ class IndexViewModel(context: Context) : ViewModel() {
                         loading = false,
                         refreshing = false,
                         items = items,
+                        unresolved = tracked.unresolved,
                         error = if (items.isEmpty() && tracked.catalogFailed) {
                             "指数目录下载失败，检查网络后重试"
                         } else {

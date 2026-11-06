@@ -11,6 +11,8 @@ import androidx.compose.ui.test.printToString
 import com.hukua.fundradar.data.AiConfig
 import com.hukua.fundradar.data.AiVerdict
 import com.hukua.fundradar.data.Candle
+import com.hukua.fundradar.data.Fund
+import com.hukua.fundradar.data.FundExtra
 import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.IndexQuote
 import com.hukua.fundradar.data.KlineSeries
@@ -19,6 +21,8 @@ import com.hukua.fundradar.data.SwingAction
 import com.hukua.fundradar.data.TrackedIndex
 import com.hukua.fundradar.ui.AddIndexSheetContent
 import com.hukua.fundradar.ui.AppBottomBar
+import com.hukua.fundradar.ui.DetailState
+import com.hukua.fundradar.ui.FundDetailScreen
 import com.hukua.fundradar.ui.IndexAddState
 import com.hukua.fundradar.ui.IndexContent
 import com.hukua.fundradar.ui.IndexItem
@@ -160,6 +164,47 @@ class FeatureScreenshotTest {
         compose.waitForIdle()
         save("add-index-sheet")
         dump("tree-add-index.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h1100dp-xxhdpi")
+    fun fundDetailScreen() {
+        val fund = Fund(
+            code = "025833",
+            name = "天弘电网设备特高压指数C",
+            type = "指数型-股票",
+            nav = 1.0188,
+            accNav = 1.0188,
+            dayGrowth = 1.85,
+            buyStatus = "开放申购",
+            sellStatus = "开放赎回",
+            minBuy = 10.0,
+            maxBuy = null,
+            rate = "0.00%",
+            sourceRate = "1.20%",
+            riskLevel = 4,
+            navDate = "2026-11-05",
+            trackIndex = "中证电网设备主题指数"
+        )
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                FundDetailScreen(
+                    state = DetailState.Ready(
+                        fund,
+                        FundExtra(
+                            company = "天弘基金",
+                            manager = "张磊",
+                            established = "2025-06-18",
+                            scale = "12.4 亿元"
+                        )
+                    ),
+                    onBack = {}
+                )
+            }
+        }
+        compose.waitForIdle()
+        save("fund-detail")
+        dump("tree-fund-detail.txt")
     }
 
     private fun sampleIndexState(): IndexUiState {

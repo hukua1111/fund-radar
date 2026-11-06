@@ -88,6 +88,7 @@ private val SUGGESTIONS = listOf(
 fun FundRadarScreen(
     viewModel: FundViewModel,
     onOpenSettings: () -> Unit = {},
+    onOpenDetail: (Fund) -> Unit = viewModel::openDetail,
     bottomBar: @Composable () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -107,7 +108,7 @@ fun FundRadarScreen(
         snackbarHostState = snackbarHostState,
         onRefresh = viewModel::refresh,
         onSelectFilter = viewModel::setFilter,
-        onOpenDetail = viewModel::openDetail,
+        onOpenDetail = onOpenDetail,
         onAddClick = viewModel::openAdd,
         onSuggestion = viewModel::addFund,
         onDismissChanges = viewModel::dismissChanges,
@@ -157,7 +158,7 @@ fun FundRadarContent(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "自选基金 · 申购限额监控",
+                            text = "自选基金 · 净值与申购限额",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -638,40 +639,46 @@ private fun FilterRow(
     }
 }
 
+/**
+ * Compact header strip. The purchase limit is a secondary concern now — it
+ * shows up as one small pill next to the count instead of three big numbers,
+ * and only when there is something to report.
+ */
 @Composable
 private fun SummaryCard(state: FundUiState) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainer
     ) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatBlock(
-                    label = "限大额",
-                    value = state.limitedCount,
-                    color = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.weight(1f)
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "自选 " + state.all.size + " 只",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
                 )
-                StatBlock(
-                    label = "暂停申购",
-                    value = state.suspendedCount,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.weight(1f)
-                )
-                StatBlock(
-                    label = "不限购",
-                    value = state.openCount,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.weight(1f)
-                )
+                Spacer(Modifier.width(10.dp))
+                if (state.limitedCount > 0) {
+                    MiniPill(
+                        text = "限大额 " + state.limitedCount,
+                        container = MaterialTheme.colorScheme.tertiaryContainer,
+                        content = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                if (state.suspendedCount > 0) {
+                    MiniPill(
+                        text = "暂停 " + state.suspendedCount,
+                        container = MaterialTheme.colorScheme.errorContainer,
+                        content = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(3.dp))
             Text(
                 text = buildString {
-                    append("自选 ")
-                    append(state.all.size)
-                    append(" 只 · 更新于 ")
+                    append("更新于 ")
                     append(timeText(state.updatedAt))
                     append(" · 天天基金公开数据")
                     if (state.fromCache) append(" · 离线缓存")
@@ -684,22 +691,16 @@ private fun SummaryCard(state: FundUiState) {
 }
 
 @Composable
-private fun StatBlock(
-    label: String,
-    value: Int,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier) {
+private fun MiniPill(text: String, container: Color, content: Color) {
+    Surface(
+        color = container,
+        contentColor = content,
+        shape = RoundedCornerShape(50)
+    ) {
         Text(
-            text = value.toString(),
-            style = MaterialTheme.typography.headlineSmall,
-            color = color
-        )
-        Text(
-            text = label,
+            text = text,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
         )
     }
 }

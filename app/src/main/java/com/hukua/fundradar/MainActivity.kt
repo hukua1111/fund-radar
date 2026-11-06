@@ -5,22 +5,18 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.SettingsStore
 import com.hukua.fundradar.ui.AppBottomBar
-import com.hukua.fundradar.ui.FundDetailSheet
+import com.hukua.fundradar.ui.FundDetailScreen
 import com.hukua.fundradar.ui.FundRadarScreen
 import com.hukua.fundradar.ui.FundViewModel
 import com.hukua.fundradar.ui.IndexScreen
@@ -67,8 +63,19 @@ class MainActivity : ComponentActivity() {
                     route = "settings"
                 }
 
+                // Detail is a page of its own now, not a bottom sheet: back from
+                // it lands on the fund list, never on a stale sheet.
+                val backToList: () -> Unit = {
+                    viewModel.closeDetail()
+                    route = "list"
+                }
+
                 BackHandler(enabled = route != "list") {
-                    route = if (route == "settings") settingsReturn else "list"
+                    when (route) {
+                        "settings" -> route = settingsReturn
+                        "fund" -> backToList()
+                        else -> route = "list"
+                    }
                 }
 
                 // Index quotes are cheap but change intraday; refresh on tab entry.
@@ -82,6 +89,24 @@ class MainActivity : ComponentActivity() {
 
                 when (route) {
                     "settings" -> SettingsScreen(onBack = { route = settingsReturn })
+
+                    "fund" -> {
+                        val state = detail
+                        if (state == null) {
+                            // Removed from the watchlist (or restored without a
+                            // selection): nothing to show, fall back to the list.
+                            LaunchedEffect(Unit) { route = "list" }
+                        } else {
+                            FundDetailScreen(
+                                state = state,
+                                onBack = backToList,
+                                onRemove = { code ->
+                                    viewModel.removeFund(code)
+                                    route = "list"
+                                }
+                            )
+                        }
+                    }
 
                     "kline" -> {
                         val klineViewModel: KlineViewModel = viewModel(
@@ -103,20 +128,15 @@ class MainActivity : ComponentActivity() {
                             bottomBar = bottomBar
                         )
 
-                        else -> {
-                            FundRadarScreen(
-                                viewModel = viewModel,
-                                onOpenSettings = openSettings,
-                                bottomBar = bottomBar
-                            )
-                            detail?.let { state ->
-                                FundDetailSheet(
-                                    state = state,
-                                    onDismiss = viewModel::closeDetail,
-                                    onRemove = viewModel::removeFund
-                                )
-                            }
-                        }
+                        else -> FundRadarScreen(
+                            viewModel = viewModel,
+                            onOpenSettings = openSettings,
+                            onOpenDetail = { fund ->
+                                viewModel.openDetail(fund)
+                                route = "fund"
+                            },
+                            bottomBar = bottomBar
+                        )
                     }
                 }
             }

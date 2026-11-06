@@ -1,7 +1,7 @@
 package com.hukua.fundradar.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,6 +25,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,20 +35,20 @@ import androidx.compose.ui.unit.dp
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.LimitType
 import com.hukua.fundradar.data.growthText
-import com.hukua.fundradar.data.money
 import com.hukua.fundradar.data.navText
 import com.hukua.fundradar.ui.theme.LocalMarketColors
 
 /**
- * One fund, one card:
+ * One fund, one overview card. Only what you scan for lives here — name, code,
+ * NAV and today's move; every other number is one tap away on [FundDetailScreen].
  *
  * ```
  * ┌──────────────────────────────────────────────┐
  * │ 招商中证白酒指数(LOF)A              [限大额 50万] │
  * │ 161725 · 指数型-股票                            │
  * │ ──────────────────────────────────────────── │
- * │ 单位净值     日涨跌     起购      费率           │
- * │ 0.5676      +5.58%    10元      0.10%         │
+ * │ 0.5676              +5.58%                ›   │
+ * │ 单位净值             日涨跌                    │
  * └──────────────────────────────────────────────┘
  * ```
  */
@@ -89,27 +92,22 @@ fun FundCard(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             Spacer(Modifier.height(10.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                InfoCell(
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ValueCell(
                     label = "单位净值",
                     value = navText(fund.nav),
                     modifier = Modifier.weight(1f)
                 )
-                InfoCell(
+                ValueCell(
                     label = "日涨跌",
                     value = growthText(fund.dayGrowth),
                     valueColor = growthColor(fund.dayGrowth),
                     modifier = Modifier.weight(1f)
                 )
-                InfoCell(
-                    label = "起购",
-                    value = fund.minBuy?.let { money(it) } ?: "—",
-                    modifier = Modifier.weight(1f)
-                )
-                InfoCell(
-                    label = "费率",
-                    value = fund.rate.ifBlank { "—" },
-                    modifier = Modifier.weight(1f)
+                // material-icons-core has no chevron; drawing two strokes keeps
+                // the APK from pulling in the whole extended icon set.
+                Chevron(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                 )
             }
         }
@@ -173,7 +171,7 @@ fun LimitBadge(fund: Fund, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun InfoCell(
+private fun ValueCell(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
@@ -181,18 +179,35 @@ private fun InfoCell(
 ) {
     Column(modifier = modifier) {
         Text(
+            text = value,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = valueColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1
         )
-        Spacer(Modifier.height(2.dp))
-        Text(
-            text = value,
-            style = MaterialTheme.typography.titleSmall,
-            color = valueColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+    }
+}
+
+@Composable
+private fun Chevron(color: Color) {
+    Canvas(modifier = Modifier.size(14.dp)) {
+        val path = Path().apply {
+            moveTo(size.width * 0.32f, size.height * 0.18f)
+            lineTo(size.width * 0.68f, size.height * 0.5f)
+            lineTo(size.width * 0.32f, size.height * 0.82f)
+        }
+        drawPath(
+            path = path,
+            color = color,
+            style = Stroke(width = 2f.dp.toPx(), cap = StrokeCap.Round)
         )
     }
 }

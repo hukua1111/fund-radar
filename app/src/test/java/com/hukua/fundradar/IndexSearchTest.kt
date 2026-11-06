@@ -1,8 +1,10 @@
 package com.hukua.fundradar
 
 import com.hukua.fundradar.data.AiConfig
+import com.hukua.fundradar.data.EastMoneyApi
 import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.IndexSearchApi
+import com.hukua.fundradar.data.resolveIndex
 import com.hukua.fundradar.data.searchCatalog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -55,6 +57,51 @@ class IndexSearchTest {
         assertEquals("中证白酒", searchCatalog("白酒", catalog).first().name)
         assertEquals(2, searchCatalog("沪深300", catalog).size)
         assertTrue(searchCatalog("新能源", catalog).isEmpty())
+    }
+
+    @Test
+    fun parsesEastMoneySuggestKeepingOnlyIndices() {
+        // Real reply for 电网设备: a 板块, the CSI index, then an ETF.
+        val body = """
+            {"QuotationCodeTable":{"Data":[
+              {"Code":"BK0457","Name":"电网设备","SecurityTypeName":"板块","SecurityType":"9","QuoteID":"90.BK0457"},
+              {"Code":"931994","Name":"电网设备主题","SecurityTypeName":"指数","SecurityType":"11","QuoteID":"2.931994"},
+              {"Code":"159326","Name":"电网设备ETF华夏","SecurityTypeName":"基金","SecurityType":"8","QuoteID":"0.159326"}
+            ]}}
+        """.trimIndent()
+
+        val result = EastMoneyApi.parseIndexSuggest(body)
+
+        assertEquals(1, result.size)
+        assertEquals("931994", result[0].code)
+        assertEquals(2, result[0].market)
+        assertEquals("2.931994", result[0].secid)
+        assertEquals("电网设备主题", result[0].name)
+    }
+
+    @Test
+    fun eastMoneySuggestHandlesGarbage() {
+        assertTrue(EastMoneyApi.parseIndexSuggest("").isEmpty())
+        assertTrue(EastMoneyApi.parseIndexSuggest("not json").isEmpty())
+        assertTrue(EastMoneyApi.parseIndexSuggest("""{"QuotationCodeTable":{"Data":[]}}""").isEmpty())
+    }
+
+    @Test
+    fun csiIndexNamesResolveAgainstSuggestHits() {
+        // 跟踪标的 written by the fund page vs the short name 行情 uses
+        val tracked = listOf(
+            "中证电网设备主题指数" to "931994",
+            "中证卫星产业指数" to "931594",
+            "中证半导体材料设备主题指数" to "931743"
+        )
+        val hits = listOf(
+            IndexEntry("931994", 2, "电网设备主题"),
+            IndexEntry("931594", 2, "卫星产业"),
+            IndexEntry("931743", 2, "半导体材料设备")
+        )
+        tracked.forEach { (name, code) ->
+            assertEquals(name, code, resolveIndex(name, hits)?.code)
+        }
     }
 
     @Test

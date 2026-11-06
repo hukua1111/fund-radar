@@ -175,7 +175,20 @@ object IndexCatalog {
     private const val FILE_NAME = "index_catalog.json"
     private const val TTL_MS = 7L * 24 * 60 * 60 * 1000
 
+    /**
+     * Bumped when the set of indices we download changes. A cache written by an
+     * older build is treated as stale, so 1.3.1 picks up 中证指数公司's own codes
+     * (930xxx / 931xxx) on first launch instead of a week later.
+     */
+    private const val CACHE_VERSION = 2
+
+    /** 跟踪标的名 → `secid|名称`，一个月内不再问网络。 */
+    private const val RESOLVE_FILE = "index_name_resolve.json"
+    private const val RESOLVE_TTL_MS = 30L * 24 * 60 * 60 * 1000
+
     private var memory: List<IndexEntry>? = null
+    private var resolveCache: MutableMap<String, String>? = null
+    private val resolveMisses = HashSet<String>()
 
     suspend fun load(context: Context, force: Boolean = false): List<IndexEntry> {
         if (!force) {
@@ -206,8 +219,83 @@ object IndexCatalog {
         return emptyList()
     }
 
+    /**
+     * Turns a fund's 跟踪标的 into a quotable index, for names the local
+     * catalogue does not contain.
+     *
+     * The catalogue only knows the indices 行情 lists for 沪深; 中证指数公司's own
+     * codes (930xxx / 931xxx / H30xxx) live under market 2 and are reached
+     * through the suggest API instead. Hits and misses are cached on disk so a
+     * refresh does not hit the network again, and a failed lookup is remembered
+     * for the rest of the session so an offline refresh stays fast.
+     */
+    suspend fun resolveByName(context: Context, trackedName: String): IndexEntry? {
+        val key = normalizeIndexName(trackedName)
+        if (key.isBlank()) return null
+
+        val cache = loadResolveCache(context)
+        cache[key]?.let { return parseCached(it) }
+        if (key in resolveMisses) return null
+
+        val candidates = runCatching { EastMoneyApi.searchIndices(trackedName) }
+            .getOrDefault(emptyList())
+        if (candidates.isEmpty()) {
+            resolveMisses += key
+            return null
+        }
+
+        // 同一个词可能同时命中 指数 / 板块；用和本地目录一样的打分逻辑挑最像的
+        val best = resolveIndex(trackedName, candidates) ?: candidates.firstOrNull()
+        if (best == null) {
+            resolveMisses += key
+            return null
+        }
+
+        cache[key] = "${best.secid}|${best.name}"
+        runCatching { saveResolveCache(context, cache) }
+        return best
+    }
+
+    private fun parseCached(value: String): IndexEntry? {
+        val secid = value.substringBefore('|')
+        val name = value.substringAfter('|', "")
+        val market = secid.substringBefore('.').toIntOrNull() ?: return null
+        val code = secid.substringAfter('.')
+        if (code.isBlank() || name.isBlank()) return null
+        return IndexEntry(code, market, name)
+    }
+
+    private fun loadResolveCache(context: Context): MutableMap<String, String> {
+        resolveCache?.let { return it }
+        val map = HashMap<String, String>()
+        val file = File(context.applicationContext.filesDir, RESOLVE_FILE)
+        runCatching {
+            if (!file.exists()) return@runCatching
+            val json = JSONObject(file.readText(Charsets.UTF_8))
+            if (System.currentTimeMillis() - json.optLong("savedAt", 0L) > RESOLVE_TTL_MS) return@runCatching
+            val items = json.optJSONObject("items") ?: return@runCatching
+            items.keys().forEach { name ->
+                val value = items.optString(name)
+                if (value.isNotBlank()) map[name] = value
+            }
+        }
+        resolveCache = map
+        return map
+    }
+
+    private fun saveResolveCache(context: Context, map: Map<String, String>) {
+        val items = JSONObject()
+        map.forEach { (name, value) -> items.put(name, value) }
+        val json = JSONObject()
+            .put("savedAt", System.currentTimeMillis())
+            .put("items", items)
+        File(context.applicationContext.filesDir, RESOLVE_FILE)
+            .writeText(json.toString(), Charsets.UTF_8)
+    }
+
     private fun read(file: File): Pair<Long, List<IndexEntry>>? = runCatching {
         val json = JSONObject(file.readText(Charsets.UTF_8))
+        if (json.optInt("version", 1) != CACHE_VERSION) return@runCatching null
         val savedAt = json.optLong("savedAt", 0L)
         val array = json.optJSONArray("items") ?: JSONArray()
         val items = ArrayList<IndexEntry>(array.length())
@@ -232,6 +320,7 @@ object IndexCatalog {
             )
         }
         val json = JSONObject()
+            .put("version", CACHE_VERSION)
             .put("savedAt", System.currentTimeMillis())
             .put("items", array)
         file.writeText(json.toString(), Charsets.UTF_8)

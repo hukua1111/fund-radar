@@ -33,11 +33,20 @@ object EastMoneyApi {
     private const val UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
+    /** Public token baked into the 行情 search box, not a secret of any kind. */
+    private const val SEARCH_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
+
     private const val LIST_URL = "https://fund.eastmoney.com/Data/Fund_JJJZ_Data.aspx"
     private const val FUND_PAGE = "https://fund.eastmoney.com/%s.html"
 
-    /** 深市/中证系列指数 + 沪市指数，两个 filter 合起来约 1.1k 条。 */
-    private val CATALOG_FILTERS = listOf("m:0+t:5", "m:1+s:3")
+    /**
+     * 深市指数 + 沪市指数 + 中证指数公司自有代码（930xxx / 931xxx / H30xxx）。
+     *
+     * 第三组不能少：`中证卫星产业指数 931594`、`中证电网设备主题指数 931994`、
+     * `中证半导体材料设备主题指数 931743` 这类新指数只挂在 market=2 下，
+     * 少了它，跟踪这些指数的基金在指数页会直接消失。
+     */
+    private val CATALOG_FILTERS = listOf("m:0+t:5", "m:1+s:3", "m:2+t:5")
 
     /** Fund list, sorted by today's change, with purchase status included. */
     suspend fun fetchList(pageSize: Int, keyword: String = ""): List<Fund> {
@@ -329,6 +338,55 @@ object EastMoneyApi {
                 if (diff.length() < 100) break
                 page++
             }
+        }
+        return result.values.toList()
+    }
+
+    /**
+     * Name → index lookup, the same suggest service the 行情 search box uses.
+     *
+     * This is the part the catalogue cannot do: it answers a *name* with the
+     * quotable id, including 中证指数公司's own codes (930xxx / 931xxx) that a
+     * fund's 跟踪标的 is written in. Response shape:
+     *
+     * ```
+     * {"QuotationCodeTable":{"Data":[
+     *   {"Code":"931994","Name":"电网设备主题","SecurityTypeName":"指数",
+     *    "QuoteID":"2.931994",...}]}}
+     * ```
+     */
+    suspend fun searchIndices(keyword: String, limit: Int = 8): List<IndexEntry> {
+        val term = keyword.trim()
+        if (term.isEmpty()) return emptyList()
+
+        val url = "https://searchapi.eastmoney.com/api/suggest/get" +
+            "?input=" + URLEncoder.encode(term, "UTF-8") +
+            "&type=14&token=$SEARCH_TOKEN&count=$limit"
+        val body = runCatching { httpGet(url, referer = "https://www.eastmoney.com/") }
+            .getOrNull() ?: return emptyList()
+        return parseIndexSuggest(body)
+    }
+
+    /** Visible for tests: turns a suggest reply into quotable indices. */
+    internal fun parseIndexSuggest(body: String): List<IndexEntry> {
+        val rows = runCatching {
+            JSONObject(body).optJSONObject("QuotationCodeTable")?.optJSONArray("Data")
+        }.getOrNull() ?: return emptyList()
+
+        val result = LinkedHashMap<String, IndexEntry>()
+        for (i in 0 until rows.length()) {
+            val item = rows.optJSONObject(i) ?: continue
+            // 指数 only: the same reply also carries 板块 / 基金 / 股票 rows.
+            val kind = item.optString("SecurityTypeName")
+            val securityType = item.optString("SecurityType")
+            if (kind != "指数" && securityType != "11" && securityType != "5") continue
+
+            val quoteId = item.optString("QuoteID")
+            val code = item.optString("Code").ifBlank { quoteId.substringAfter('.') }
+            val name = item.optString("Name")
+            val market = quoteId.substringBefore('.').toIntOrNull() ?: continue
+            if (code.isBlank() || name.isBlank() || market < 0) continue
+            result["$market.$code"] = IndexEntry(code, market, name)
         }
         return result.values.toList()
     }

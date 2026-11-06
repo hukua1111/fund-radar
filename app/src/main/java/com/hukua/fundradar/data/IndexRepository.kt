@@ -2,6 +2,9 @@ package com.hukua.fundradar.data
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 
 /** Latest quote of one index. */
@@ -15,7 +18,9 @@ data class IndexQuote(
 /** What the 指数 tab shows, plus whether the catalogue itself failed. */
 data class TrackedResult(
     val items: List<TrackedIndex>,
-    val catalogFailed: Boolean = false
+    val catalogFailed: Boolean = false,
+    /** 跟踪标的名没能解析成指数代码，用来给用户一句解释而不是静默消失。 */
+    val unresolved: List<String> = emptyList()
 )
 
 /**
@@ -42,10 +47,6 @@ class IndexRepository(context: Context) {
         }
 
         val catalog = IndexCatalog.load(appContext)
-        if (catalog.isEmpty()) {
-            // The fund driven part cannot be resolved; hand added indices still can.
-            return@withContext TrackedResult(manualItems, catalogFailed = true)
-        }
 
         val byName = LinkedHashMap<String, MutableList<String>>()
         watchlist.forEach { fund ->
@@ -54,9 +55,25 @@ class IndexRepository(context: Context) {
             byName.getOrPut(tracked) { mutableListOf() }.add(fund.code)
         }
 
+        // 本地目录先匹配；目录里没有的（930xxx / 931xxx 中证自有代码）再去问
+        // suggest 接口。并发解析，几个名字不会串成一条长队。
+        val resolved = coroutineScope {
+            byName.map { (name, codes) ->
+                async {
+                    val entry = resolveIndex(name, catalog)
+                        ?: IndexCatalog.resolveByName(appContext, name)
+                    Triple(name, codes, entry)
+                }
+            }.awaitAll()
+        }
+
         val merged = LinkedHashMap<String, TrackedIndex>()
-        byName.forEach { (name, codes) ->
-            val entry = resolveIndex(name, catalog) ?: return@forEach
+        val unresolved = ArrayList<String>()
+        resolved.forEach { (name, codes, entry) ->
+            if (entry == null) {
+                unresolved += name
+                return@forEach
+            }
             val existing = merged[entry.secid]
             merged[entry.secid] = if (existing == null) {
                 TrackedIndex(entry, name, codes.distinct())
@@ -67,7 +84,11 @@ class IndexRepository(context: Context) {
 
         val auto = merged.values.sortedBy { it.entry.name }
         val autoSecids = auto.map { it.entry.secid }.toSet()
-        TrackedResult(auto + manualItems.filterNot { it.entry.secid in autoSecids })
+        TrackedResult(
+            items = auto + manualItems.filterNot { it.entry.secid in autoSecids },
+            catalogFailed = catalog.isEmpty() && auto.isEmpty(),
+            unresolved = unresolved
+        )
     }
 
     suspend fun quote(entry: IndexEntry): IndexQuote? = withContext(Dispatchers.IO) {
@@ -107,8 +128,11 @@ class IndexRepository(context: Context) {
 
         val typedCode = entry.name == entry.code
         val candidates = if (typedCode) {
-            // A bare code: try the likely venue first, then the other one.
-            listOf(entry, entry.copy(market = 1 - entry.market))
+            // A bare code: try the likely venue first, then the other two
+            // (0 深市 / 1 沪市 / 2 中证指数公司).
+            listOf(entry) + listOf(0, 1, 2)
+                .filter { it != entry.market }
+                .map { entry.copy(market = it) }
         } else {
             listOf(entry)
         }
@@ -136,14 +160,22 @@ class IndexRepository(context: Context) {
     }
 
     /**
-     * Search for the "添加指数" sheet: Tencent smartbox first (it answers names
-     * and codes), local catalogue as the offline fallback. A bare 6-digit code
-     * that neither source knows is offered as a candidate — [addIndex] verifies
-     * it against the quote endpoint before it is saved.
+     * Search for the "添加指数" sheet.
+     *
+     * East Money's suggest API comes first — it is the only source that knows
+     * 中证指数公司's own codes (930xxx / 931xxx), which most index funds track.
+     * Tencent smartbox is the fallback (it also answers bare codes), and the
+     * local catalogue covers the offline case. A bare 6-digit code that none of
+     * them knows is offered as a candidate — [addIndex] verifies it against the
+     * quote endpoint before it is saved.
      */
     suspend fun search(query: String): List<IndexEntry> = withContext(Dispatchers.IO) {
         val keyword = query.trim()
         if (keyword.isEmpty()) return@withContext emptyList()
+
+        val eastMoney = runCatching { EastMoneyApi.searchIndices(keyword) }
+            .getOrDefault(emptyList())
+        if (eastMoney.isNotEmpty()) return@withContext eastMoney
 
         val remote = runCatching { IndexSearchApi.search(keyword) }.getOrDefault(emptyList())
         if (remote.isNotEmpty()) return@withContext remote
