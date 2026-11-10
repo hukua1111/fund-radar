@@ -200,11 +200,6 @@ fun FundDetailScreen(
                             modifier = Modifier.weight(1f)
                         )
                         DetailMetric(
-                            label = "累计净值",
-                            value = if (fund.accNav > 0) navText(fund.accNav) else "—",
-                            modifier = Modifier.weight(1f)
-                        )
-                        DetailMetric(
                             label = "日涨跌",
                             value = growthText(fund.dayGrowth),
                             valueColor = growthColor(fund.dayGrowth),
@@ -243,7 +238,12 @@ fun FundDetailScreen(
             if (!showFundFacts) {
                 MyHoldingSection(
                     holding = holding,
-                    nav = estimate?.nav ?: fund.nav,
+                    // 市值、浮动盈亏只认基金公司公布的实际净值：当天已经出净值
+                    // 就用当天，没出就用前一交易日收盘的（fund.nav 一直是「最近
+                    // 一次公布」的那一笔，navDate 是它的日期）。盘中估算只用来
+                    // 在「今日估算」里做参考，不进账户口径。
+                    nav = fund.nav,
+                    navDate = fund.navDate,
                     percent = estimate?.takeIf { it.isRealtime }?.percent,
                     onBuy = onBuy,
                     onSell = onSell,
@@ -355,16 +355,8 @@ fun FundDetailScreen(
                         MaterialTheme.colorScheme.onSurface
                     }
                 )
-                val quote = klineState?.quote
-                if (quote != null) {
-                    DetailRow(
-                        label = "实时点位",
-                        value = String.format(Locale.US, "%.2f", quote.price) + "  " +
-                            growthText(quote.changePercent) +
-                            (quote.time.takeIf { it.isNotBlank() }?.let { "  ·  $it" } ?: ""),
-                        valueColor = growthColor(quote.changePercent)
-                    )
-                }
+                // 实时点位不在这里显示：K 线卡片顶部已经有一份，重复一遍只会让人
+                // 以为这一行的点位是「跟踪标的」的行情。
             }
             Spacer(Modifier.height(4.dp))
             Text(
@@ -535,6 +527,7 @@ private fun DetailRow(
 private fun MyHoldingSection(
     holding: Holding?,
     nav: Double,
+    navDate: String,
     percent: Double?,
     onBuy: () -> Unit,
     onSell: () -> Unit,
@@ -576,6 +569,7 @@ private fun MyHoldingSection(
         return
     }
 
+    val hasNav = nav > 0
     val value = holding.marketValue(nav)
     val profit = holding.profit(nav)
     val profitPercent = holding.profitPercent(nav)
@@ -585,15 +579,20 @@ private fun MyHoldingSection(
         DetailRow("持有份额", sharesText(holding.shares) + " 份")
         DetailRow("持仓成本", amountText(holding.cost) + " 元")
         DetailRow("成本单价", navText(holding.avgCost))
-        DetailRow("最新市值", amountText(value) + " 元")
+        DetailRow("最新市值", if (hasNav) amountText(value) + " 元" else "—")
         DetailRow(
             label = "浮动盈亏",
-            value = signedAmountText(profit) +
-                (profitPercent?.let { "（" + growthText(it) + "）" } ?: ""),
-            valueColor = growthColor(profit)
+            value = if (hasNav) {
+                signedAmountText(profit) +
+                    (profitPercent?.let { "（" + growthText(it) + "）" } ?: "")
+            } else {
+                "—"
+            },
+            valueColor = if (hasNav) growthColor(profit) else MaterialTheme.colorScheme.onSurfaceVariant
         )
-        if (today != null) {
-            DetailRow("今日盈亏", signedAmountText(today), valueColor = growthColor(today))
+        if (today != null && hasNav) {
+            // 今日的净值要等到晚上才公布，这一格只能是盘中估算，故在数值后标「估」。
+            DetailRow("今日盈亏", signedAmountText(today) + "（估）", valueColor = growthColor(today))
         }
         if (abs(holding.realized) > 0.005) {
             DetailRow(
@@ -603,6 +602,17 @@ private fun MyHoldingSection(
             )
         }
     }
+
+    Spacer(Modifier.height(6.dp))
+    Text(
+        text = buildString {
+            append("市值与浮动盈亏按实际净值计算")
+            if (navDate.isNotBlank()) append("（净值日期 $navDate）")
+            if (percent != null) append("；今日盈亏为盘中估算，仅作参考")
+        },
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 
     Spacer(Modifier.height(4.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {

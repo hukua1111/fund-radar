@@ -99,7 +99,13 @@ data class FundUiState(
             it.source == com.hukua.fundradar.data.EstimateSource.INDEX
         }
 
-    /** 估算净值优先，拿不到估算就用最近公布的净值。 */
+    /**
+     * 下单面板的预填净值：能取到盘中估算就用估算（今天买入的成本更接近收盘净值），
+     * 取不到才退回最近公布的净值。
+     *
+     * 只给「买入 / 卖出」这类要填价格的输入框用 —— 账户口径（市值、浮动盈亏、
+     * 持仓总市值）一律按 [Fund.nav] 的实际净值算，不走估算，见 [holdingValue]。
+     */
     fun navOf(fund: Fund): Double = estimates[fund.code]?.nav ?: fund.nav
 
     fun holdingOf(fund: Fund): Holding? = holdings[fund.code]?.takeUnless { it.isEmpty }
@@ -107,7 +113,7 @@ data class FundUiState(
     /** 有持仓的基金（按份额降序，默认列表顺序不受影响）。 */
     val holdingFunds: List<Fund>
         get() = all.filter { holdingOf(it) != null }
-            .sortedByDescending { holdingOf(it)?.marketValue(navOf(it)) ?: 0.0 }
+            .sortedByDescending { holdingOf(it)?.marketValue(it.nav) ?: 0.0 }
 
     /** 填过份额的只数 —— 列表上半部分「持有」。 */
     val heldCount: Int get() = all.count { holdingOf(it) != null }
@@ -118,14 +124,18 @@ data class FundUiState(
     /** 当前筛选下、有份额的基金，按持有市值降序。 */
     val visibleHeld: List<Fund>
         get() = visible.filter { holdingOf(it) != null }
-            .sortedByDescending { holdingOf(it)?.marketValue(navOf(it)) ?: 0.0 }
+            .sortedByDescending { holdingOf(it)?.marketValue(it.nav) ?: 0.0 }
 
     /** 当前筛选下、只看行情的基金，保持添加顺序。 */
     val visibleUnheld: List<Fund> get() = visible.filter { holdingOf(it) == null }
 
-    /** 持仓总市值。 */
+    /**
+     * 持仓总市值 —— 按实际净值（[Fund.nav]）算，不掺盘中估算。
+     * 当天的净值要等晚上才公布，在那之前这里显示的是上一个交易日的收盘净值，
+     * 与详情页「我的持仓」保持一致；估算只在「今日估算」和今日盈亏里出现。
+     */
     val holdingValue: Double
-        get() = all.sumOf { fund -> holdingOf(fund)?.marketValue(navOf(fund)) ?: 0.0 }
+        get() = all.sumOf { fund -> holdingOf(fund)?.marketValue(fund.nav) ?: 0.0 }
 
     /** 持仓总成本。 */
     val holdingCost: Double get() = all.sumOf { holdingOf(it)?.cost ?: 0.0 }
@@ -141,7 +151,7 @@ data class FundUiState(
         get() = all.sumOf { fund ->
             val holding = holdingOf(fund) ?: return@sumOf 0.0
             val estimate = estimates[fund.code]?.takeIf { it.isRealtime } ?: return@sumOf 0.0
-            holding.todayProfit(navOf(fund), estimate.percent) ?: 0.0
+            holding.todayProfit(fund.nav, estimate.percent) ?: 0.0
         }
 
     fun derive(): FundUiState = copy(visible = all.filter { filter.matches(it) })

@@ -152,7 +152,9 @@ fun FundCard(
                 Spacer(Modifier.height(10.dp))
                 HoldingStrip(
                     holding = holding,
-                    nav = estimate?.nav ?: fund.nav,
+                    // 市值按实际净值算：今天的净值还没出来时就是上一交易日收盘价，
+                    // 与详情页一致，盘中不会跟着估算一起跳。
+                    nav = fund.nav,
                     percent = estimate?.takeIf { it.isRealtime }?.percent
                 )
             }
@@ -236,7 +238,7 @@ private fun CompactFundCard(
             }
 
             if (holding != null && !holding.isEmpty) {
-                val nav = estimate?.nav ?: fund.nav
+                val nav = fund.nav
                 val today = livePercent?.let { holding.todayProfit(nav, it) }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
