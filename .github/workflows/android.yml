@@ -1,0 +1,135 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+    paths-ignore:
+      - "dist/**"
+      - "docs/**"
+      - "**.md"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_debug:
+        description: "同时构建 debug 包"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          # 仓库里提交了历史 APK（dist/ 约 200MB），浅克隆避免拉全量历史
+          fetch-depth: 1
+
+      - name: 配置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 配置 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 SDK 平台与构建工具
+        run: sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools" | tail -5
+
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: 读取版本号
+        id: ver
+        run: |
+          CODE=$(grep -oP 'versionCode\s*=\s*\K\d+' app/build.gradle.kts | head -1)
+          NAME=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "构建版本 ${NAME} (${CODE})"
+
+      - name: 单元测试
+        id: test
+        # Robolectric 截图测试需要现下载 android-all 运行时，CI 上偶发失败时不拦产物，
+        # 由最后的「汇总测试结果」把整个 job 标红。
+        continue-on-error: true
+        run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: 构建 release
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: 构建 debug
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_debug }}
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: 整理产物
+        run: |
+          V="${{ steps.ver.outputs.name }}"
+          mkdir -p out
+          cp app/build/outputs/apk/release/*.apk "out/FundRadar-${V}-release.apk"
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk "out/FundRadar-${V}-debug.apk"
+          fi
+          ls -lh out
+          for f in out/*.apk; do
+            echo "--- $f ---"
+            sha256sum "$f"
+          done > out/SHA256SUMS.txt
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: FundRadar-${{ steps.ver.outputs.name }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+            app/build/screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: 汇总测试结果
+        if: always()
+        run: |
+          if [ "${{ steps.test.outcome }}" != "success" ]; then
+            echo "::error::单元测试未通过（结论：${{ steps.test.outcome }}）。APK 已构建，但质量门禁没过。"
+            exit 1
+          fi
+          echo "单元测试通过"
+
+      - name: 发布 Release（仅打 tag 时）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          generate_release_notes: true
+          draft: false

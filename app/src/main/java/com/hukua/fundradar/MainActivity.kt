@@ -21,14 +21,12 @@ import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.SettingsStore
 import com.hukua.fundradar.data.isTradingTime
 import com.hukua.fundradar.ui.AppBottomBar
-import com.hukua.fundradar.ui.AddIndexSheet
 import com.hukua.fundradar.ui.FundDetailScreen
 import com.hukua.fundradar.ui.FundRadarScreen
 import com.hukua.fundradar.ui.FundViewModel
 import com.hukua.fundradar.ui.HoldingMode
 import com.hukua.fundradar.ui.HoldingSheet
 import com.hukua.fundradar.ui.IndexViewModel
-import com.hukua.fundradar.ui.KlineScreen
 import com.hukua.fundradar.ui.KlineViewModel
 import com.hukua.fundradar.ui.SettingsScreen
 import com.hukua.fundradar.ui.TAB_LIMIT
@@ -37,6 +35,17 @@ import com.hukua.fundradar.ui.TrackIndexSheet
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import com.hukua.fundradar.work.DailyScheduler
 import kotlinx.coroutines.delay
+
+/** 交易时段列表刷新间隔：指数行情一次批量才 0.4 KB。 */
+private const val LIST_TICK_MS = 5_000L
+
+/** 收盘 / 午休后的列表刷新间隔，只为发现「又开盘了」。 */
+private const val LIST_IDLE_TICK_MS = 60_000L
+
+/** 停留在详情页时，单只指数的刷新间隔（一次请求约 0.3 KB）。 */
+private const val DETAIL_TICK_MS = 3_000L
+
+private const val DETAIL_IDLE_TICK_MS = 30_000L
 
 class MainActivity : ComponentActivity() {
 
@@ -69,28 +78,14 @@ class MainActivity : ComponentActivity() {
                 val portfolioHoldingSheet by portfolioViewModel.holdingSheet.collectAsStateWithLifecycle()
                 val limitHoldingSheet by limitViewModel.holdingSheet.collectAsStateWithLifecycle()
                 val indexState by indexViewModel.state.collectAsStateWithLifecycle()
-                val indexAdd by indexViewModel.add.collectAsStateWithLifecycle()
 
                 var route by rememberSaveable { mutableStateOf("list") }
                 var tab by rememberSaveable { mutableStateOf(TAB_PORTFOLIO) }
                 var settingsReturn by rememberSaveable { mutableStateOf("list") }
-                var klineSecid by rememberSaveable { mutableStateOf("") }
-                var klineCode by rememberSaveable { mutableStateOf("") }
-                var klineName by rememberSaveable { mutableStateOf("") }
-                // 从详情页进 K 线时，返回要回到那只基金，而不是基金列表。
-                var klineReturn by rememberSaveable { mutableStateOf("list") }
 
                 val isLimitTab = tab == TAB_LIMIT
                 val activeViewModel = if (isLimitTab) limitViewModel else portfolioViewModel
                 val detail = if (isLimitTab) limitDetail else portfolioDetail
-
-                val openKline: (IndexEntry, String) -> Unit = { entry, trackedName ->
-                    klineReturn = route
-                    klineSecid = entry.secid
-                    klineCode = entry.code
-                    klineName = entry.name.ifBlank { trackedName }
-                    route = "kline"
-                }
 
                 val openSettings: () -> Unit = {
                     settingsReturn = route
@@ -108,26 +103,26 @@ class MainActivity : ComponentActivity() {
                     when (route) {
                         "settings" -> route = settingsReturn
                         "fund" -> backToList()
-                        "kline" -> route = klineReturn
                         else -> route = "list"
                     }
                 }
 
-                // 持仓页上的指数行情条和盘中估算一样是活的：进页面拉一次，
-                // 留在页面上时按估值同样的节奏顺带刷新指数（指数条只有几条，
-                // 3 分钟一次足够，不必跟着 60 秒的估算跑）。
+                // 指数不再单独占一条横滑栏（基金卡片和详情里已经有跟踪标的），
+                // 但详情页的「看这个指数的 K 线」仍要知道这只基金对应哪个指数，
+                // 所以进持仓页时后台解析一次「基金 → 指数」，不再跟着估算轮询。
                 val lifecycle = LocalLifecycleOwner.current.lifecycle
                 LaunchedEffect(tab, route, lifecycle) {
                     if (route != "list") return@LaunchedEffect
                     when (tab) {
                         TAB_PORTFOLIO -> lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                            var ticks = 0
                             indexViewModel.load()
+                            // 指数行情 5 秒一轮：一次是东财批量（40 只 0.4 KB），
+                            // 一次是腾讯的 ETF/重仓股批量，两家的公开接口都扛得住
+                            // 这个频率（实测连发 40 次腾讯 0 失败、东财单主机偶发
+                            // 空回复，已做主机轮换与备用源）。非交易时段降到 60 秒。
                             while (true) {
                                 portfolioViewModel.refreshEstimates()
-                                if (ticks > 0 && ticks % 3 == 0) indexViewModel.load()
-                                ticks++
-                                delay(if (isTradingTime()) 60_000L else 5 * 60_000L)
+                                delay(if (isTradingTime()) LIST_TICK_MS else LIST_IDLE_TICK_MS)
                             }
                         }
                     }
@@ -151,11 +146,44 @@ class MainActivity : ComponentActivity() {
                             val picker = if (isLimitTab) limitTrackPicker else portfolioTrackPicker
                             val holdingSheet = if (isLimitTab) limitHoldingSheet else portfolioHoldingSheet
                             // 详情页里「看 K 线」要知道这只基金对应的指数：
-                            // 先看手动指定，再从指数条已解析好的列表里找。
+                            // 先看手动指定，再看后台解析出来的映射。
                             val klineEntry = overrides[state.fund.code]
-                                ?: indexState.items
-                                    .firstOrNull { it.tracked.fundCodes.contains(state.fund.code) }
-                                    ?.tracked?.entry
+                                ?: indexState.entryFor(state.fund.code)?.entry
+
+                            // K 线直接铺在详情页里：为这只基金对应的指数建一个
+                            // view model，进页面就加载，返回列表就随页面一起停。
+                            val klineViewModel: KlineViewModel? = klineEntry?.let { entry ->
+                                viewModel(
+                                    key = "kline-${entry.secid}",
+                                    factory = KlineViewModel.factory(
+                                        this,
+                                        entry.secid,
+                                        entry.code,
+                                        entry.name.ifBlank { state.fund.trackIndex }
+                                    )
+                                )
+                            }
+                            val klineState = klineViewModel?.state?.collectAsStateWithLifecycle()
+
+                            // 停留在详情页时每 3 秒拉一次这个指数的点位；
+                            // 收盘后拉到 30 秒一次就够。
+                            LaunchedEffect(klineViewModel) {
+                                val vm = klineViewModel ?: return@LaunchedEffect
+                                var ticks = 0
+                                while (true) {
+                                    vm.refreshQuote()
+                                    // 盘中半小时补一次当日 K 线，量很小（只补最后几根）。
+                                    if (ticks > 0 && ticks % 10 == 0 && isTradingTime()) {
+                                        vm.load(force = true)
+                                    }
+                                    // 估值本身按 15 秒走一轮就够，指数点位才是 3 秒。
+                                    if (ticks > 0 && ticks % 5 == 0) {
+                                        activeViewModel.refreshEstimates()
+                                    }
+                                    ticks++
+                                    delay(if (isTradingTime()) DETAIL_TICK_MS else DETAIL_IDLE_TICK_MS)
+                                }
+                            }
 
                             FundDetailScreen(
                                 state = state,
@@ -173,9 +201,11 @@ class MainActivity : ComponentActivity() {
                                 removeLabel = if (isLimitTab) "从限购清单移除" else "从持仓移除",
                                 trackOverride = overrides[state.fund.code],
                                 trackedIndex = klineEntry,
-                                onOpenKline = klineEntry?.let { entry ->
-                                    { openKline(entry, state.fund.trackIndex) }
-                                },
+                                klineState = klineState?.value,
+                                onKlineRange = { range -> klineViewModel?.setRange(range) },
+                                onKlineRefresh = { klineViewModel?.load(force = true) },
+                                onKlineJudge = { klineViewModel?.judge() },
+                                onOpenSettings = openSettings,
                                 onEditTrack = { activeViewModel.openTrackPicker(state.fund) },
                                 onClearTrack = { activeViewModel.clearTrack(state.fund.code) },
                                 showFundFacts = isLimitTab,
@@ -231,18 +261,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    "kline" -> {
-                        val klineViewModel: KlineViewModel = viewModel(
-                            key = "kline-$klineSecid",
-                            factory = KlineViewModel.factory(this, klineSecid, klineCode, klineName)
-                        )
-                        KlineScreen(
-                            viewModel = klineViewModel,
-                            onBack = { route = klineReturn },
-                            onOpenSettings = openSettings
-                        )
-                    }
-
                     else -> when (tab) {
                         TAB_LIMIT -> FundRadarScreen(
                             viewModel = limitViewModel,
@@ -262,22 +280,8 @@ class MainActivity : ComponentActivity() {
                                     portfolioViewModel.openDetail(fund)
                                     route = "fund"
                                 },
-                                indices = indexState,
-                                onOpenKline = openKline,
-                                onAddIndex = indexViewModel::openAdd,
-                                onRemoveIndex = indexViewModel::removeIndex,
-                                onRefreshIndices = indexViewModel::load,
                                 bottomBar = bottomBar
                             )
-
-                            if (indexAdd.open) {
-                                AddIndexSheet(
-                                    state = indexAdd,
-                                    onQueryChange = indexViewModel::onQueryChange,
-                                    onAddIndex = indexViewModel::addIndex,
-                                    onDismiss = indexViewModel::closeAdd
-                                )
-                            }
                         }
                     }
                 }

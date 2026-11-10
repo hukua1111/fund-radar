@@ -34,12 +34,22 @@ class KlineStore(context: Context) {
                 )
             }
             if (candles.isEmpty()) return null
+            val metaJson = root.optJSONObject("meta")
             Entry(
                 series = KlineSeries(
                     code = root.optString("code"),
                     name = root.optString("name"),
                     source = KlineSource.EXCHANGE,
-                    candles = candles
+                    candles = candles,
+                    meta = KlineMeta(
+                        // 老缓存没有 meta 对象，全部走默认值 —— KlineRepository
+                        // 靠 historySource 为空来判断「需要重建一次」。
+                        pe = metaJson?.optDouble("pe")?.takeUnless { it.isNaN() },
+                        constituents = metaJson?.optInt("constituents", 0)?.takeIf { it > 0 },
+                        historySource = metaJson?.optString("historySource").orEmpty(),
+                        tailSource = metaJson?.optString("tailSource").orEmpty(),
+                        asOf = metaJson?.optString("asOf").orEmpty()
+                    )
                 ),
                 fetchedAt = root.optLong("fetchedAt", 0L)
             )
@@ -60,10 +70,18 @@ class KlineStore(context: Context) {
                         .put(candle.volume)
                 )
             }
+            val metaJson = JSONObject()
+                .put("pe", series.meta.pe ?: JSONObject.NULL)
+                .put("constituents", series.meta.constituents ?: JSONObject.NULL)
+                .put("historySource", series.meta.historySource)
+                .put("tailSource", series.meta.tailSource)
+                .put("asOf", series.meta.asOf)
+
             val root = JSONObject()
                 .put("code", series.code)
                 .put("name", series.name)
                 .put("fetchedAt", fetchedAt)
+                .put("meta", metaJson)
                 .put("candles", rows)
 
             if (!dir.exists()) dir.mkdirs()
@@ -107,5 +125,10 @@ fun mergeCandles(
     return if (merged.size > maxBars) merged.takeLast(maxBars) to added else merged to added
 }
 
-/** 单只指数最多保留多少根日 K（约两年）。 */
-const val MAX_BARS = 500
+/**
+ * 单只指数最多保留多少根日 K。
+ *
+ * 1.13.0 从 500 提到 1200（约五年）：中证官网一次能给到上市以来全部日线，
+ * 只留两年太浪费；单只文件约 60KB，十只指数 600KB，可以接受。
+ */
+const val MAX_BARS = 1200

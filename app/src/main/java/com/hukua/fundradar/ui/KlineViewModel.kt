@@ -9,11 +9,19 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.hukua.fundradar.data.AiAdvisor
 import com.hukua.fundradar.data.AiContext
 import com.hukua.fundradar.data.AiContextBuilder
+import com.hukua.fundradar.data.AiPrompt
 import com.hukua.fundradar.data.AiVerdict
 import com.hukua.fundradar.data.IndexEntry
+import com.hukua.fundradar.data.IndexQuoteApi
+import com.hukua.fundradar.data.IndexSource
 import com.hukua.fundradar.data.KlineRepository
+import com.hukua.fundradar.data.RealtimeQuote
 import com.hukua.fundradar.data.KlineSeries
 import com.hukua.fundradar.data.SettingsStore
+import com.hukua.fundradar.data.SwingAction
+import com.hukua.fundradar.data.VerdictStore
+import com.hukua.fundradar.data.VerdictStabilizer
+import com.hukua.fundradar.data.todayText
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +45,10 @@ data class KlineUiState(
     val bars: Int = 0,
     /** 最近一次增量补进来的根数。 */
     val added: Int = 0,
+    /** 这段 K 线的来源，如「中证指数官网 + 东方财富」。 */
+    val sourceLabel: String = "",
+    /** 上游最新一根的日期；比今天早说明还没补到当日。 */
+    val dataAsOf: String = "",
     val fetchedAt: Long = 0L,
     val judging: Boolean = false,
     /** 正在抓大盘/重仓/账户数据，还没开始请求模型。 */
@@ -44,8 +56,15 @@ data class KlineUiState(
     /** 这一轮给 AI 带上了哪些数据，比如「大盘 6 个指数 · 重仓 10 只」。 */
     val contextSummary: String = "",
     val verdict: AiVerdict? = null,
+    /** 本轮实际发给模型的提示词原文，界面上可以展开看。 */
+    val prompt: String = "",
     val verdictError: String? = null,
-    val aiConfigured: Boolean = false
+    val aiConfigured: Boolean = false,
+    /** 这个指数的实时点位，详情页停留时按秒刷新。 */
+    val quote: RealtimeQuote? = null,
+    /** 点位走的是哪家行情：东方财富（主）或腾讯（备用）。 */
+    val quoteSource: IndexSource = IndexSource.EASTMONEY,
+    val quoteDegraded: Boolean = false
 )
 
 /** K line + AI swing judgement for one index. */
@@ -69,6 +88,7 @@ class KlineViewModel(
     val state: StateFlow<KlineUiState> = _state.asStateFlow()
 
     private var activeJob: Job? = null
+    private var quoteJob: Job? = null
 
     init {
         // 磁盘上有就直接画出来，再去补最新的几根。
@@ -82,7 +102,9 @@ class KlineViewModel(
                         name = it.name.ifBlank { series.name },
                         fromCache = true,
                         bars = series.candles.size,
-                        fetchedAt = cached.fetchedAt
+                        fetchedAt = cached.fetchedAt,
+                        sourceLabel = cached.sourceLabel,
+                        dataAsOf = series.meta.asOf
                     )
                 }
             }
@@ -106,6 +128,8 @@ class KlineViewModel(
                     fromCache = result.fromCache,
                     bars = (series ?: it.series)?.candles?.size ?: 0,
                     added = result.added,
+                    sourceLabel = result.sourceLabel.ifBlank { it.sourceLabel },
+                    dataAsOf = (series ?: it.series)?.meta?.asOf.orEmpty(),
                     fetchedAt = result.fetchedAt.takeIf { time -> time > 0 } ?: it.fetchedAt,
                     error = result.error ?: if (series == null) "没有取到指数行情" else null
                 )
@@ -115,6 +139,26 @@ class KlineViewModel(
 
     fun setRange(range: Int) {
         _state.update { it.copy(range = range) }
+    }
+
+    /**
+     * 拉一次这个指数的实时点位。详情页停留时每 3 秒call一次；上一次没回来
+     * 就跳过这一轮，避免网络慢的时候请求叠在一起。
+     */
+    fun refreshQuote() {
+        if (quoteJob?.isActive == true) return
+        quoteJob = viewModelScope.launch {
+            val batch = runCatching { IndexQuoteApi.fetchBatch(listOf(entry())) }
+                .getOrNull() ?: return@launch
+            val quote = batch.quotes[secid] ?: return@launch
+            _state.update {
+                it.copy(
+                    quote = quote,
+                    quoteSource = batch.source,
+                    quoteDegraded = batch.degraded
+                )
+            }
+        }
     }
 
     fun judge() {
@@ -149,11 +193,41 @@ class KlineViewModel(
 
             _state.update { it.copy(preparing = false, contextSummary = summary) }
 
+            // 上一次的结论从磁盘读：关掉 App 再进来也要记得，否则「维持」维持不住。
+            val store = VerdictStore(context)
+            val memory = store.read(code)
+
             runCatching {
-                AiAdvisor.judge(config, current.name, code, series, subject = "指数", context = aiContext)
+                AiAdvisor.judge(
+                    config = config,
+                    fundName = current.name,
+                    code = code,
+                    series = series,
+                    subject = "指数",
+                    context = aiContext,
+                    memory = memory
+                )
             }
-                .onSuccess { verdict ->
-                    _state.update { it.copy(judging = false, verdict = verdict) }
+                .onSuccess { outcome ->
+                    // 提示词和模型回复都可能在本地被拦下来，所以收敛放在这里做。
+                    val dayChange = current.quote?.changePercent ?: series.changeOver(1)
+                    // 上次结论放了几天？超过有效期就不再要求「涨 15 分」才准改口，
+                    // 否则一个两周前的判断能把后面所有判断都钉死。
+                    val expired = memory?.let { m ->
+                        val limit = if (m.verdict.action == SwingAction.BUY) {
+                            AiPrompt.VALID_DAYS_BUY
+                        } else {
+                            AiPrompt.VALID_DAYS_OTHER
+                        }
+                        series.candles.count { it.date > m.day } >= limit
+                    } ?: false
+                    val (verdict, next) = VerdictStabilizer.stabilize(
+                        outcome.verdict, memory, dayChange, todayText(), expired
+                    )
+                    store.write(code, next)
+                    _state.update {
+                        it.copy(judging = false, verdict = verdict, prompt = outcome.prompt)
+                    }
                 }
                 .onFailure { throwable ->
                     _state.update {

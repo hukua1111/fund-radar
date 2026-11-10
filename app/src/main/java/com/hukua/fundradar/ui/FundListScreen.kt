@@ -47,6 +47,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -72,7 +75,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hukua.fundradar.data.Fund
 import com.hukua.fundradar.data.FundScope
-import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.data.amountText
 import com.hukua.fundradar.data.growthText
@@ -94,17 +96,12 @@ fun FundRadarScreen(
     viewModel: FundViewModel,
     onOpenSettings: () -> Unit = {},
     onOpenDetail: (Fund) -> Unit = viewModel::openDetail,
-    /** 指数行情条，只有持仓页用；限购页传默认值即可。 */
-    indices: IndexUiState = IndexUiState(loading = false),
-    onOpenKline: (IndexEntry, String) -> Unit = { _, _ -> },
-    onAddIndex: () -> Unit = {},
-    onRemoveIndex: (String) -> Unit = {},
-    onRefreshIndices: () -> Unit = {},
     bottomBar: @Composable () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val addState by viewModel.add.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val holdFilter by viewModel.holdFilter.collectAsStateWithLifecycle()
 
     val error = state.error
     LaunchedEffect(error) {
@@ -117,10 +114,7 @@ fun FundRadarScreen(
     FundRadarContent(
         state = state,
         snackbarHostState = snackbarHostState,
-        onRefresh = {
-            viewModel.refresh()
-            onRefreshIndices()
-        },
+        onRefresh = viewModel::refresh,
         onSelectFilter = viewModel::setFilter,
         onOpenDetail = onOpenDetail,
         onAddClick = viewModel::openAdd,
@@ -128,10 +122,8 @@ fun FundRadarScreen(
         onDismissChanges = viewModel::dismissChanges,
         onImportPortfolio = viewModel::importPortfolio,
         onOpenSettings = onOpenSettings,
-        indices = indices,
-        onOpenKline = onOpenKline,
-        onAddIndex = onAddIndex,
-        onRemoveIndex = onRemoveIndex,
+        holdFilter = holdFilter,
+        onSelectHoldFilter = viewModel::setHoldFilter,
         bottomBar = bottomBar
     )
 
@@ -162,10 +154,9 @@ fun FundRadarContent(
     onDismissChanges: () -> Unit = {},
     onImportPortfolio: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
-    indices: IndexUiState = IndexUiState(loading = false),
-    onOpenKline: (IndexEntry, String) -> Unit = { _, _ -> },
-    onAddIndex: () -> Unit = {},
-    onRemoveIndex: (String) -> Unit = {},
+    /** 持仓页「全部 / 持有 / 未持有」分段选择。 */
+    holdFilter: HoldingFilter = HoldingFilter.ALL,
+    onSelectHoldFilter: (HoldingFilter) -> Unit = {},
     bottomBar: @Composable () -> Unit = {}
 ) {
     val portfolio = state.scope.isPortfolio
@@ -247,14 +238,22 @@ fun FundRadarContent(
 
                 item(key = "summary") { SummaryCard(state) }
 
-                if (portfolio) {
-                    item(key = "indices") {
-                        IndexStrip(
-                            state = indices,
-                            onOpenKline = onOpenKline,
-                            onAddClick = onAddIndex,
-                            onRemove = onRemoveIndex,
-                            modifier = Modifier.padding(bottom = 2.dp)
+                // 两类都有内容时，概览卡和列表之间给一个分段选择，
+                // 点一下就能只看持有 / 只看未持有，不必在两段之间滑。
+                val held = state.visibleHeld
+                val unheld = state.visibleUnheld
+                val effectiveHold = when {
+                    holdFilter == HoldingFilter.HELD && held.isEmpty() -> HoldingFilter.ALL
+                    holdFilter == HoldingFilter.UNHELD && unheld.isEmpty() -> HoldingFilter.ALL
+                    else -> holdFilter
+                }
+                if (portfolio && state.all.isNotEmpty()) {
+                    item(key = "hold-filter") {
+                        HoldingFilterBar(
+                            selected = effectiveHold,
+                            heldCount = held.size,
+                            unheldCount = unheld.size,
+                            onSelect = onSelectHoldFilter
                         )
                     }
                 }
@@ -284,14 +283,71 @@ fun FundRadarContent(
                         }
                     }
 
+                    portfolio -> {
+                        // 加了 != 持有：填过份额的排在上面，只加进来看行情的放下面。
+                        // 分段选到某一类时不铺标题 —— 选择器已经说明在看哪一段。
+                        val showHeld = effectiveHold != HoldingFilter.UNHELD
+                        val showUnheld = effectiveHold != HoldingFilter.HELD
+                        val sectioned = showHeld && showUnheld &&
+                            held.isNotEmpty() && unheld.isNotEmpty()
+
+                        if (showHeld) {
+                            if (sectioned) {
+                                item(key = "header-held") {
+                                    ListSectionHeader(
+                                        title = "持有",
+                                        count = held.size,
+                                        caption = "按市值降序"
+                                    )
+                                }
+                            }
+                            items(items = held, key = { "held-${it.code}" }) { fund ->
+                                FundCard(
+                                    fund = fund,
+                                    onClick = { onOpenDetail(fund) },
+                                    estimate = state.estimates[fund.code],
+                                    showLimitBadge = false,
+                                    holding = state.holdingOf(fund),
+                                    compact = true
+                                )
+                            }
+                        }
+
+                        if (showUnheld) {
+                            if (sectioned) {
+                                item(key = "header-unheld") {
+                                    ListSectionHeader(
+                                        title = "未持有",
+                                        count = unheld.size,
+                                        caption = "只跟行情，不计盈亏",
+                                        muted = true,
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+                                }
+                            }
+                            items(items = unheld, key = { "unheld-${it.code}" }) { fund ->
+                                FundCard(
+                                    fund = fund,
+                                    onClick = { onOpenDetail(fund) },
+                                    estimate = state.estimates[fund.code],
+                                    showLimitBadge = false,
+                                    holding = null,
+                                    compact = true
+                                )
+                            }
+                        }
+
+                        item(key = "footer") { Footer() }
+                    }
+
                     else -> {
                         items(items = state.visible, key = { it.code }) { fund ->
                             FundCard(
                                 fund = fund,
                                 onClick = { onOpenDetail(fund) },
                                 estimate = state.estimates[fund.code],
-                                showLimitBadge = !portfolio,
-                                holding = if (portfolio) state.holdingOf(fund) else null
+                                showLimitBadge = true,
+                                holding = null
                             )
                         }
                         item(key = "footer") { Footer() }
@@ -663,6 +719,104 @@ private fun ChangesCard(
     }
 }
 
+/**
+ * 列表分组标题：一条短色条 + 「持有 / 未持有」+ 只数，右侧可跟一句说明。
+ * 只在一组以上时出现，避免只有一类基金时多出一行噪音。
+ */
+@Composable
+private fun ListSectionHeader(
+    title: String,
+    count: Int,
+    modifier: Modifier = Modifier,
+    caption: String? = null,
+    muted: Boolean = false
+) {
+    val accent = if (muted) {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 2.dp, end = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 3.dp, height = 12.dp)
+                .clip(RoundedCornerShape(50))
+                .background(accent)
+        )
+        Spacer(Modifier.width(7.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = "$count 只",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (caption != null) {
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = caption,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * 概览卡下面的分段选择：全部 / 持有 / 未持有，每段带只数。
+ * 某一类为空时该段置灰，点不进空列表。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HoldingFilterBar(
+    selected: HoldingFilter,
+    heldCount: Int,
+    unheldCount: Int,
+    onSelect: (HoldingFilter) -> Unit
+) {
+    val options = HoldingFilter.entries
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        options.forEachIndexed { index, option ->
+            val count = when (option) {
+                HoldingFilter.ALL -> heldCount + unheldCount
+                HoldingFilter.HELD -> heldCount
+                HoldingFilter.UNHELD -> unheldCount
+            }
+            SegmentedButton(
+                selected = selected == option,
+                onClick = { onSelect(option) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
+                enabled = count > 0,
+                colors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                icon = {},
+                label = {
+                    Text(
+                        text = option.label + " " + count,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1
+                    )
+                }
+            )
+        }
+    }
+}
+
 @Composable
 private fun FilterRow(
     selected: FundFilter,
@@ -715,8 +869,8 @@ private fun SummaryCard(state: FundUiState) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = (if (state.scope.isPortfolio) "持仓 " else "监控 ") +
-                        state.all.size + " 只",
+                    text = (if (state.scope.isPortfolio) "持有 " else "监控 ") +
+                        (if (state.scope.isPortfolio) state.heldCount else state.all.size) + " 只",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -798,7 +952,10 @@ private fun SummaryCard(state: FundUiState) {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = state.estimatesError
-                        ?: "按跟踪指数 / 目标 ETF / 重仓股估算，每分钟自动刷新",
+                        ?: "按跟踪指数 / 目标 ETF / 重仓股估算 · 指数行情 " +
+                        state.quoteSource.label +
+                        (if (state.quoteDegraded) "（备用源）" else "") +
+                        " · 5 秒刷新",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (state.estimatesError != null) {
                         MaterialTheme.colorScheme.error

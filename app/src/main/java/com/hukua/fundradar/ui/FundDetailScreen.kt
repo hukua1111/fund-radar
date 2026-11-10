@@ -79,9 +79,14 @@ fun FundDetailScreen(
     removeLabel: String = "从自选移除",
     /** 用户手动指定的跟踪指数，没有则为 null（按基金名自动识别）。 */
     trackOverride: IndexEntry? = null,
-    /** 自动识别/手动指定解析出来的指数，用来直接跳 K 线。 */
+    /** 自动识别/手动指定解析出来的指数。 */
     trackedIndex: IndexEntry? = null,
-    onOpenKline: (() -> Unit)? = null,
+    /** 跟踪指数的 K 线（内嵌在这一页里，不再点按钮跳走）。 */
+    klineState: KlineUiState? = null,
+    onKlineRange: (Int) -> Unit = {},
+    onKlineRefresh: () -> Unit = {},
+    onKlineJudge: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     onEditTrack: () -> Unit = {},
     onClearTrack: () -> Unit = {},
     /** 申购限额与基金档案只在限购页展示，持仓页不关心这些。 */
@@ -224,6 +229,17 @@ fun FundDetailScreen(
                 }
             }
 
+            if (klineState != null) {
+                Spacer(Modifier.height(20.dp))
+                KlineCard(
+                    state = klineState,
+                    onSelectRange = onKlineRange,
+                    onRefresh = onKlineRefresh,
+                    onJudge = onKlineJudge,
+                    onOpenSettings = onOpenSettings
+                )
+            }
+
             if (!showFundFacts) {
                 MyHoldingSection(
                     holding = holding,
@@ -339,6 +355,16 @@ fun FundDetailScreen(
                         MaterialTheme.colorScheme.onSurface
                     }
                 )
+                val quote = klineState?.quote
+                if (quote != null) {
+                    DetailRow(
+                        label = "实时点位",
+                        value = String.format(Locale.US, "%.2f", quote.price) + "  " +
+                            growthText(quote.changePercent) +
+                            (quote.time.takeIf { it.isNotBlank() }?.let { "  ·  $it" } ?: ""),
+                        valueColor = growthColor(quote.changePercent)
+                    )
+                }
             }
             Spacer(Modifier.height(4.dp))
             Text(
@@ -354,17 +380,6 @@ fun FundDetailScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Row {
-                if (trackedIndex != null && onOpenKline != null) {
-                    TextButton(
-                        onClick = onOpenKline,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                            horizontal = 4.dp,
-                            vertical = 0.dp
-                        )
-                    ) {
-                        Text("看这个指数的 K 线", style = MaterialTheme.typography.labelLarge)
-                    }
-                }
                 TextButton(
                     onClick = onEditTrack,
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(

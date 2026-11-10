@@ -38,11 +38,21 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hukua.fundradar.data.IndexEntry
 
+/** Handy indices shown before the user types anything. */
+internal val INDEX_SUGGESTIONS = listOf(
+    IndexEntry("399997", 0, "中证白酒"),
+    IndexEntry("000300", 1, "沪深300"),
+    IndexEntry("000905", 1, "中证500"),
+    IndexEntry("399006", 0, "创业板指"),
+    IndexEntry("000688", 1, "科创50"),
+    IndexEntry("399989", 0, "中证医疗")
+)
+
 /**
  * 「指定跟踪指数」底部弹层。
  *
  * 用在基金详情页：上游给的跟踪标的名和行情目录对不上时，用户在这里搜一个
- * 指数，把这只基金的行情来源钉死，指数页也就跟着出现这个标的。
+ * 指数，把这只基金的行情来源钉死，估算和 K 线就都跟着走。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

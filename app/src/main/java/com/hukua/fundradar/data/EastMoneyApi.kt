@@ -28,6 +28,9 @@ data class IndexProbe(val status: IndexProbeStatus, val name: String = "")
  */
 object EastMoneyApi {
 
+    /** 数据来源标签，K 线卡片和 AI 提示词都用它。 */
+    const val LABEL = "东方财富"
+
     /** Public token baked into the 行情 search box, not a secret of any kind. */
     private const val SEARCH_TOKEN = "D43BF722C8E33BDC906FB84D85E326E8"
 
@@ -274,7 +277,11 @@ object EastMoneyApi {
             code = data.optString("code"),
             name = data.optString("name"),
             source = KlineSource.EXCHANGE,
-            candles = candles
+            candles = candles,
+            meta = KlineMeta(
+                historySource = LABEL,
+                asOf = candles.last().date
+            )
         )
     }.getOrNull()
 

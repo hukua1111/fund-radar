@@ -1,5 +1,8 @@
 package com.hukua.fundradar.data
 
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 import kotlin.math.sqrt
 
@@ -58,13 +61,80 @@ data class Macd(
     val previousHist: Double? get() = if (hist.size >= 2) hist[hist.size - 2] else null
 }
 
+/**
+ * 这条 K 线附带的指数元信息。目前只有中证官网会给，东财/新浪留空。
+ *
+ * [pe] 是官网字段 `peg` 的原值——名字叫 peg，实际是滚动市盈率（沪深300 约
+ * 13、光伏约 33，与各家行情软件的 PE-TTM 对得上），这里按 PE 用。
+ */
+data class KlineMeta(
+    val pe: Double? = null,
+    /** 成分股数量。 */
+    val constituents: Int? = null,
+    /** 历史段来自哪家，界面上直接显示。 */
+    val historySource: String = "",
+    /** 当日那根来自哪家。 */
+    val tailSource: String = "",
+    /** 上游最新一根的日期，可能比今天早（官网是 T-1）。 */
+    val asOf: String = ""
+) {
+    val isEmpty: Boolean
+        get() = pe == null && constituents == null && historySource.isBlank()
+
+    /** 「中证指数官网 + 东方财富补当日」这样的一行说明。 */
+    val label: String
+        get() = when {
+            historySource.isBlank() && tailSource.isBlank() -> ""
+            historySource.isBlank() -> tailSource
+            tailSource.isBlank() -> historySource
+            historySource == tailSource -> historySource
+            else -> "$historySource + $tailSource"
+        }
+}
+
 data class KlineSeries(
     val code: String,
     val name: String,
     val source: KlineSource,
-    val candles: List<Candle>
+    val candles: List<Candle>,
+    val meta: KlineMeta = KlineMeta()
 ) {
     val latest: Candle? get() = candles.lastOrNull()
+
+    /**
+     * 最后一根是不是「今天还没收盘」的那根。
+     *
+     * 盘中每一跳都会改这根 K 线的收盘价，用它算出来的 MA/MACD/BOLL 会跟着抖，
+     * AI 判断就会在同一天里来回翻。判断技术面时要把这根剔掉，只用定型的日线。
+     */
+    fun hasOpenBar(now: Calendar = Calendar.getInstance()): Boolean {
+        val last = candles.lastOrNull() ?: return false
+        // 按传入的时刻推「今天」，不在内部再取一次系统时间，否则测试和调用方
+        // 会各算各的日期。
+        if (last.date != todayText(now)) return false
+        val minutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+        return minutes < 15 * 60
+    }
+
+    /** 剔掉盘中未收盘那根之后的序列；已收盘就原样返回。 */
+    fun completed(now: Calendar = Calendar.getInstance()): KlineSeries =
+        if (hasOpenBar(now)) copy(candles = candles.dropLast(1)) else this
+
+    /** 最近 [days] 根的平均成交量（不含最后一根，避免当日半天量拉低基准）。 */
+    fun averageVolume(days: Int = 5): Double? {
+        if (candles.size < days + 1) return null
+        val window = candles.subList(candles.size - 1 - days, candles.size - 1)
+        val sum = window.sumOf { it.volume }
+        return if (sum <= 0.0) null else sum / days
+    }
+
+    /** 最后一根的成交量相对前 [days] 日均量的倍数。 */
+    fun volumeRatio(days: Int = 5): Double? {
+        val average = averageVolume(days) ?: return null
+        val last = latest?.volume ?: return null
+        if (average <= 0.0 || last <= 0.0) return null
+        return last / average
+    }
 
     fun ma(period: Int): List<Double?> = movingAverage(candles.map { it.close }, period)
 
@@ -197,7 +267,12 @@ private fun exponentialMovingAverage(values: List<Double>, period: Int): List<Do
     return result
 }
 
-/** Compact price text: 4 decimals for NAV-style values, 3 for exchange prices. */fun priceText(value: Double): String =
+/** 本地日期 `yyyy-MM-dd`，与上游返回的日期格式一致。 */
+fun todayText(calendar: Calendar = Calendar.getInstance()): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.US).format(calendar.time)
+
+/** Compact price text: 4 decimals for NAV-style values, 3 for exchange prices. */
+fun priceText(value: Double): String =
     if (value >= 100) String.format(Locale.US, "%.2f", value)
     else String.format(Locale.US, "%.4f", value)
 

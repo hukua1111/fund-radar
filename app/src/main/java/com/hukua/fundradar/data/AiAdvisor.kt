@@ -29,13 +29,43 @@ enum class SwingAction {
     }
 }
 
+/**
+ * 趋势档位。模型必须自己先定这一档，再由它决定动作。
+ *
+ * 让模型直接输出「买/卖/观望」时，它在临界位置会自由裁量；先锁死档位，等于把
+ * 判断收窄成一个状态机：震荡就只能观望，多头才谈买入。
+ */
+enum class Trend(val label: String) {
+    UP("上行"),
+    RANGE("震荡"),
+    DOWN("下行"),
+    UNKNOWN("未知");
+
+    companion object {
+        fun of(raw: String): Trend = when (raw.trim().uppercase(Locale.US)) {
+            "UP", "上行", "多头", "上涨", "多头排列" -> UP
+            "DOWN", "下行", "空头", "下跌", "空头排列" -> DOWN
+            "RANGE", "震荡", "横盘", "盘整", "中性" -> RANGE
+            else -> UNKNOWN
+        }
+    }
+}
+
 data class AiVerdict(
     val action: SwingAction,
     val confidence: Int,
     val reason: String,
     val risk: String,
     val raw: String,
-    val at: Long = System.currentTimeMillis()
+    val at: Long = System.currentTimeMillis(),
+    /** 模型给出的趋势档位。 */
+    val trend: Trend = Trend.UNKNOWN,
+    /** 本次结论是沿用上一次的（新结论没达到切换门槛）。 */
+    val kept: Boolean = false,
+    /** 模型这次本来想给的动作；[kept] 为 true 且与 [action] 不同时，界面会说清楚。 */
+    val intended: SwingAction = action,
+    /** 被沿用/被替换掉的上一次动作。 */
+    val previous: SwingAction? = null
 )
 
 /** Input / output of the batched daily judgement. */
@@ -48,13 +78,22 @@ data class BatchVerdict(
     val reason: String
 )
 
+/** 一次判断的结果：结论本身，加上这轮实际发出去的提示词原文。 */
+data class JudgeOutcome(val verdict: AiVerdict, val prompt: String)
+
 /**
- * Asks an OpenAI-compatible chat endpoint whether now looks like a good moment
- * to swing-trade this fund. The model only sees numbers we computed locally
- * (大盘、板块相对强弱、OHLC、均线、MACD、BOLL、账户成本) so the answer stays
- * grounded and can be traced back to a specific number.
+ * 问一个 OpenAI 兼容接口「现在适不适合做波段」。
+ *
+ * 这个类只负责三件事：拿提示词、发请求、把回复解析成 [AiVerdict]。提示词怎么
+ * 拼在 [AiPrompt] 里，结论怎么收敛在 [VerdictStabilizer] 里 —— 三块分开才
+ * 能各自单测。
+ *
+ * `temperature` 固定 0：判断类任务不需要创造性，任何随机性都会变成用户眼里
+ * 的「反复横跳」。
  */
 object AiAdvisor {
+
+    private const val TEMPERATURE = 0.0
 
     suspend fun judge(
         config: AiConfig,
@@ -62,177 +101,26 @@ object AiAdvisor {
         code: String,
         series: KlineSeries,
         subject: String = "基金",
-        context: AiContext = AiContext()
-    ): AiVerdict = withContext(Dispatchers.IO) {
+        context: AiContext = AiContext(),
+        memory: VerdictMemory? = null
+    ): JudgeOutcome = withContext(Dispatchers.IO) {
         require(config.configured) { "还没有配置 AI 接口" }
-        val latest = series.latest ?: throw IllegalStateException("没有可用的行情数据")
+        require(series.latest != null) { "没有可用的行情数据" }
 
-        val maValues = series.maValues()
-        val ma20 = maValues[20]
-        val vsMa20 = ma20?.takeIf { it > 0 }?.let { (latest.close - it) / it * 100.0 }
-        val boll = series.boll()
-        val bollUpper = boll.upper.lastOrNull()
-        val bollMiddle = boll.middle.lastOrNull()
-        val bollLower = boll.lower.lastOrNull()
-        val bollPosition = if (bollUpper != null && bollLower != null && bollUpper > bollLower) {
-            ((latest.close - bollLower) / (bollUpper - bollLower) * 100).coerceIn(0.0, 100.0)
-        } else {
-            null
-        }
-        val macd = series.macd()
+        val today = todayText()
+        val sameDay = memory?.day == today
+        val prompt = AiPrompt.judge(
+            fundName = fundName,
+            code = code,
+            subject = subject,
+            raw = series,
+            context = context,
+            previous = memory?.verdict,
+            sameDaySwitches = if (sameDay) memory?.switches ?: 0 else 0
+        )
 
-        val recent = series.candles.takeLast(10).joinToString("\n") { candle ->
-            String.format(
-                Locale.US,
-                "%s 开%.4f 高%.4f 低%.4f 收%.4f",
-                candle.date, candle.open, candle.high, candle.low, candle.close
-            )
-        }
-
-        val dataBlock = buildString {
-            appendLine("$subject：${fundName.ifBlank { code }}（$code）")
-            appendLine("数据来源：${if (series.source == KlineSource.EXCHANGE) "场内交易K线" else "场外每日净值"}")
-            appendLine("最新日期：${latest.date}")
-
-            // 一、大盘
-            appendLine()
-            appendLine("【一、大盘环境】")
-            if (context.pulse.isEmpty()) {
-                appendLine("（这次没取到大盘行情，判断时请说明这一点，不要假装知道市场冷暖）")
-            } else {
-                appendLine(context.pulse.joinToString("  ") {
-                    "${it.name} ${String.format(Locale.US, "%.2f", it.price)} ${pct(it.percent)}"
-                })
-                val up = context.pulse.count { it.percent > 0 }
-                appendLine("6 个宽基里 ${up} 涨 ${context.pulse.size - up} 跌（只是指数样本，不是全市场涨跌家数）")
-            }
-
-            // 二、风格 / 板块
-            appendLine()
-            appendLine("【二、风格与板块】")
-            appendLine(
-                "标的自身：今日 " + pct(series.changeOver(1)) +
-                    "  近5日 " + pct(series.changeOver(5)) +
-                    "  近20日 " + pct(series.changeOver(20)) +
-                    "  近60日 " + pct(series.changeOver(60))
-            )
-            if (context.benchmark20 != null) {
-                appendLine("沪深300 近20日 " + pct(context.benchmark20))
-            }
-            if (context.relative20 != null) {
-                val tone = if (context.relative20 >= 0) "强于大盘" else "弱于大盘"
-                appendLine(
-                    "20日相对沪深300：" + String.format(Locale.US, "%+.2f", context.relative20) +
-                        " 个百分点（$tone）"
-                )
-            }
-            if (context.relatedFunds.isNotEmpty()) {
-                appendLine("跟踪这个指数的自选基金：" + context.relatedFunds.joinToString("、"))
-            }
-
-            // 三、个券
-            appendLine()
-            appendLine("【三、前十大重仓（成分）】")
-            if (context.constituents.isEmpty()) {
-                appendLine("（没有可用的持仓明细）")
-            } else {
-                appendLine(context.constituents.joinToString("  ") { (name, percent) -> "$name ${pct(percent)}" })
-            }
-
-            // 四、技术面
-            appendLine()
-            appendLine("【四、标的技术面】")
-            appendLine("最新价格/净值：" + String.format(Locale.US, "%.4f", latest.close))
-            appendLine(
-                "均线：" + maValues.entries.joinToString("  ") { (period, value) ->
-                    "MA$period=" + (value?.let { String.format(Locale.US, "%.4f", it) } ?: "无")
-                }
-            )
-            appendLine("现价相对MA20：" + (vsMa20?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "无"))
-            appendLine(
-                "MACD(12,26,9)：DIF=" + (macd.latestDif?.let { String.format(Locale.US, "%+.4f", it) } ?: "无") +
-                    "  DEA=" + (macd.latestDea?.let { String.format(Locale.US, "%+.4f", it) } ?: "无") +
-                    "  柱=" + (macd.latestHist?.let { String.format(Locale.US, "%+.4f", it) } ?: "无") +
-                    "  前一根柱=" + (macd.previousHist?.let { String.format(Locale.US, "%+.4f", it) } ?: "无")
-            )
-            appendLine(
-                "布林带BOLL(20,2)：" +
-                    "上轨=" + (bollUpper?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
-                    "  中轨=" + (bollMiddle?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
-                    "  下轨=" + (bollLower?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
-                    (bollPosition?.let { String.format(Locale.US, "  带宽位置=%.0f%%", it) } ?: "")
-            )
-            appendLine("最近10个交易日（日期 开高低收）：")
-            append(recent)
-
-            // 五、账户
-            appendLine()
-            appendLine("【五、我的账户】")
-            if (context.accounts.isEmpty()) {
-                appendLine("这个指数相关的基金目前没有填写持仓（空仓，只需考虑买不买）")
-            } else {
-                context.accounts.forEach { line ->
-                    appendLine(
-                        "${line.fundName}（${line.fundCode}）：份额 " +
-                            String.format(Locale.US, "%.2f", line.shares) + "，成本价 " +
-                            String.format(Locale.US, "%.4f", line.avgCost) + "，市值 " +
-                            String.format(Locale.US, "%.2f", line.value) + "，浮动盈亏 " +
-                            String.format(Locale.US, "%+.2f", line.profit) +
-                            (line.profitPercent?.let { String.format(Locale.US, "（%+.2f%%）", it) } ?: "") +
-                            (line.today?.let { "，今日 " + String.format(Locale.US, "%+.2f", it) } ?: "") +
-                            (line.source.takeIf { it.isNotBlank() }?.let { "，估值来源 " + it } ?: "")
-                    )
-                }
-            }
-
-            // 六、事件与约束
-            appendLine()
-            appendLine("【六、事件与约束】")
-            if (context.events.isEmpty()) {
-                appendLine("没有特别的申购限制或事件")
-            } else {
-                context.events.forEach { appendLine("- " + it) }
-            }
-            if (context.missing.isNotEmpty()) {
-                appendLine("本次缺失的数据：" + context.missing.joinToString("、") + "（这些不要编造）")
-            }
-        }
-
-        val systemPrompt = "你是一名谨慎的基金波段交易助手。只能依据用户给出的数据判断，" +
-            "不要编造消息面，不要给出绝对化的保证。用中文回答，并且只输出一个 JSON 对象。"
-
-        val userPrompt = buildString {
-            appendLine(dataBlock)
-            appendLine()
-            appendLine("请判断当前是否适合「波段买入」「波段卖出」或「观望」。要求：")
-            appendLine("1. 按 大盘 → 板块相对强弱 → 标的自身技术面 → 我的账户 的顺序逐层分析，不要只看均线；")
-            appendLine("2. 技术面必须同时看 MA5/10/20/60 的多空排列、MACD 的 DIF/DEA 位置与柱线缩短还是放大、布林带位置、近期涨跌幅；")
-            appendLine("3. 板块明显弱于沪深300 时，即使标的自身形态不错也要降低买入的置信度；")
-            appendLine("4. 结合我的成本：深套时不要简单劝割，浮盈时也要说明回撤风险；没有持仓就只判断该不该建仓；")
-            appendLine("5. 场外基金申赎有确认延迟，判断应偏保守；缺失的数据要明确说明，不要脑补；")
-            appendLine("6. 只输出 JSON，不要 markdown 代码块，不要多余文字。")
-            append("""格式：{"action":"BUY|SELL|HOLD","confidence":0-100,"reason":"80字以内中文理由，需说明大盘与板块的相对强弱","risk":"30字以内风险提示"}""")
-        }
-
-        val payload = JSONObject().apply {
-            put("model", config.model)
-            put("temperature", 0.2)
-            put("messages", JSONArray().apply {
-                put(JSONObject().put("role", "system").put("content", systemPrompt))
-                put(JSONObject().put("role", "user").put("content", userPrompt))
-            })
-        }
-
-        val response = postJson(config.endpoint(), config.apiKey, payload.toString())
-        val content = JSONObject(response)
-            .optJSONArray("choices")
-            ?.optJSONObject(0)
-            ?.optJSONObject("message")
-            ?.optString("content")
-            ?.trim()
-            ?: throw IllegalStateException("AI 返回格式不正确")
-
-        parseVerdict(content)
+        val content = chat(config, prompt)
+        JudgeOutcome(parseVerdict(content), prompt.render())
     }
 
     /** Tolerates ```json fences and surrounding prose. */
@@ -248,12 +136,15 @@ object AiAdvisor {
         val parsed = runCatching { JSONObject(json) }.getOrNull()
             ?: return AiVerdict(SwingAction.UNKNOWN, 0, content, "", content)
 
+        val action = SwingAction.of(parsed.optString("action"))
         return AiVerdict(
-            action = SwingAction.of(parsed.optString("action")),
+            action = action,
             confidence = parsed.optInt("confidence", 0).coerceIn(0, 100),
             reason = parsed.optString("reason").ifBlank { parsed.optString("message") },
             risk = parsed.optString("risk"),
-            raw = content
+            raw = content,
+            trend = Trend.of(parsed.optString("trend")),
+            intended = action
         )
     }
 
@@ -265,57 +156,7 @@ object AiAdvisor {
         require(config.configured) { "还没有配置 AI 接口" }
         require(items.isNotEmpty()) { "自选列表为空" }
 
-        val blocks = items.joinToString("\n\n") { item ->
-            val latest = item.series.latest
-            val ma = item.series.maValues()
-            buildString {
-                appendLine("【${item.name.ifBlank { item.code }}】代码 ${item.code}")
-                appendLine("最新 ${latest?.date ?: "-"} 收盘/净值 ${latest?.let { String.format(Locale.US, "%.4f", it.close) } ?: "-"}")
-                appendLine(
-                    ma.entries.joinToString("  ") { (period, value) ->
-                        "MA$period=" + (value?.let { String.format(Locale.US, "%.4f", it) } ?: "无")
-                    }
-                )
-                val band = item.series.boll()
-                appendLine(
-                    "BOLL(20,2) 上=" + (band.upper.lastOrNull()?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
-                        " 中=" + (band.middle.lastOrNull()?.let { String.format(Locale.US, "%.4f", it) } ?: "无") +
-                        " 下=" + (band.lower.lastOrNull()?.let { String.format(Locale.US, "%.4f", it) } ?: "无")
-                )
-                append(
-                    "近5日=${pct(item.series.changeOver(5))}  近20日=${pct(item.series.changeOver(20))}  " +
-                        "近60日=${pct(item.series.changeOver(60))}"
-                )
-            }
-        }
-
-        val system = "你是一名谨慎的波段交易助手，只依据给定数据分析，不编造消息面，" +
-            "用中文回答，且只输出 JSON 数组。"
-
-        val user = buildString {
-            appendLine("下面是我自选基金跟踪的指数的最新均线与涨跌数据，请逐个判断当前是否适合波段买入 / 波段卖出 / 观望。")
-            appendLine()
-            appendLine(blocks)
-            appendLine()
-            appendLine("要求：结合 MA5/MA10/MA20/MA60 的多空排列与价格偏离度；指数不能直接买卖，结论用于指导对应基金的申赎时机，判断偏保守。")
-            append("""只输出 JSON 数组，不要代码块：""")
-            append("""[{"code":"161725","action":"BUY|SELL|HOLD","confidence":0-100,"reason":"40字以内中文理由"}]""")
-        }
-
-        val payload = JSONObject().apply {
-            put("model", config.model)
-            put("temperature", 0.2)
-            put("messages", JSONArray().apply {
-                put(JSONObject().put("role", "system").put("content", system))
-                put(JSONObject().put("role", "user").put("content", user))
-            })
-        }
-
-        val content = JSONObject(postJson(config.endpoint(), config.apiKey, payload.toString()))
-            .optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
-            ?.optString("content")?.trim()
-            ?: throw IllegalStateException("AI 返回格式不正确")
-
+        val content = chat(config, AiPrompt.batch(items))
         val jsonArray = content.let { text ->
             val start = text.indexOf('[')
             val end = text.lastIndexOf(']')
@@ -354,8 +195,21 @@ object AiAdvisor {
             ?: "连接成功，但返回内容为空"
     }
 
-    private fun pct(value: Double?): String =
-        value?.let { String.format(Locale.US, "%+.2f%%", it) } ?: "无"
+    /** 发一轮 chat completion，返回 `choices[0].message.content`。 */
+    private fun chat(config: AiConfig, prompt: JudgePrompt): String {
+        val payload = JSONObject().apply {
+            put("model", config.model)
+            put("temperature", TEMPERATURE)
+            put("messages", JSONArray().apply {
+                put(JSONObject().put("role", "system").put("content", prompt.system))
+                put(JSONObject().put("role", "user").put("content", prompt.user))
+            })
+        }
+        return JSONObject(postJson(config.endpoint(), config.apiKey, payload.toString()))
+            .optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
+            ?.optString("content")?.trim()
+            ?: throw IllegalStateException("AI 返回格式不正确")
+    }
 
     private fun postJson(url: String, apiKey: String, body: String): String {
         val connection = try {

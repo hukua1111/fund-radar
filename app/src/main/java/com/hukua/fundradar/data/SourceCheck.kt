@@ -35,10 +35,16 @@ object SourceCheck {
         if (entry == null) {
             rows += SourceCheckRow("跟踪指数", false, "$fundCode 还没有匹配到跟踪指数")
         } else {
-            val quotes = runCatching { IndexQuoteApi.fetch(listOf(entry)) }.getOrDefault(emptyMap())
-            val quote = quotes[entry.secid]
+            val batch = runCatching { IndexQuoteApi.fetchBatch(listOf(entry)) }
+                .getOrDefault(IndexQuoteBatch())
+            val quote = batch.quotes[entry.secid]
             rows += if (quote != null) {
-                SourceCheckRow("跟踪指数", true, "${entry.name} ${entry.code} ${pct(quote.changePercent)}")
+                SourceCheckRow(
+                    "跟踪指数",
+                    true,
+                    "${entry.name} ${entry.code} ${pct(quote.changePercent)} · " +
+                        batch.source.label + if (batch.degraded) "（备用源）" else "（主源）"
+                )
             } else {
                 SourceCheckRow("跟踪指数", false, "${entry.name} ${entry.code} 没有行情")
             }

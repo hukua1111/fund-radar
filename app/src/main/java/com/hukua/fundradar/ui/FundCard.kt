@@ -43,19 +43,19 @@ import com.hukua.fundradar.data.signedAmountText
 import com.hukua.fundradar.ui.theme.LocalMarketColors
 
 /**
- * One fund, one card. Two shapes:
+ * One fund, one card. Three shapes:
  *
- * Portfolio (no purchase-limit judging, the intraday estimate is the point):
+ * Portfolio, compact (the default on the holdings page — name, estimate and
+ * one line of position figures, everything else lives in the detail screen):
  * ```
  * ┌──────────────────────────────────────────────┐
- * │ 国泰中证煤炭ETF联接C                            │
- * │ 008280 · 指数型-股票                            │
- * │ ──────────────────────────────────────────── │
- * │ 2.1532              -3.36%                ›   │
- * │ 单位净值             估算涨跌                    │
- * │ 按跟踪指数估算 · 中证煤炭 · 11-05 16:14        │
+ * │ 国泰中证煤炭ETF联接C                -3.21%   › │
+ * │ 008280 · 净值 2.1532              估算涨跌    │
+ * │ 市值 2,210.52   今日 +10.16   累计 -193.54   │
  * └──────────────────────────────────────────────┘
  * ```
+ *
+ * Portfolio, full: adds the value cell row and the estimation footnote.
  *
  * Limit watchlist adds the badge and swaps the estimate for the reported
  * daily change.
@@ -68,8 +68,21 @@ fun FundCard(
     estimate: Estimate? = null,
     showLimitBadge: Boolean = true,
     /** 我的持仓，持仓页才传。 */
-    holding: Holding? = null
+    holding: Holding? = null,
+    /** 精简形态：只留基金名、估算涨跌和一行持仓数字。 */
+    compact: Boolean = false
 ) {
+    if (compact) {
+        CompactFundCard(
+            fund = fund,
+            onClick = onClick,
+            modifier = modifier,
+            estimate = estimate,
+            holding = holding
+        )
+        return
+    }
+
     Surface(
         onClick = onClick,
         modifier = modifier.fillMaxWidth(),
@@ -155,6 +168,125 @@ fun FundCard(
                 )
             }
         }
+    }
+}
+
+/**
+ * 精简卡片：基金名 + 估算涨跌 + 一行持仓数字。
+ * 净值、类型、估算依据、持有份额这些详情页里都有，列表里不再重复。
+ */
+@Composable
+private fun CompactFundCard(
+    fund: Fund,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    estimate: Estimate? = null,
+    holding: Holding? = null
+) {
+    val percent = estimate?.percent
+    val livePercent = estimate?.takeIf { it.isRealtime }?.percent
+
+    Surface(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = fund.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = fund.code + " · 净值 " + navText(fund.nav),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = percent?.let { growthText(it) } ?: "—",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = percent?.let { growthColor(it) }
+                            ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = estimate?.valueLabel ?: "估算涨跌",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                Chevron(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                )
+            }
+
+            if (holding != null && !holding.isEmpty) {
+                val nav = estimate?.nav ?: fund.nav
+                val today = livePercent?.let { holding.todayProfit(nav, it) }
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    InlineMetric(
+                        label = "市值",
+                        value = amountText(holding.marketValue(nav)),
+                        modifier = Modifier.weight(1f)
+                    )
+                    InlineMetric(
+                        label = "今日",
+                        value = today?.let { signedAmountText(it) } ?: "—",
+                        color = today?.let { growthColor(it) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    InlineMetric(
+                        label = "累计",
+                        value = signedAmountText(holding.profit(nav)),
+                        color = growthColor(holding.profit(nav)),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 一行里的小指标：浅色标签 + 半粗数字，三个等分排开。 */
+@Composable
+private fun InlineMetric(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    color: Color? = null
+) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = color ?: MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

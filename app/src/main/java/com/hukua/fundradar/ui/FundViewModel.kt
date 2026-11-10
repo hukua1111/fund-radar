@@ -16,7 +16,9 @@ import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.Holding
 import com.hukua.fundradar.data.HoldingStore
 import com.hukua.fundradar.data.IndexEntry
+import com.hukua.fundradar.data.IndexQuoteApi
 import com.hukua.fundradar.data.IndexRepository
+import com.hukua.fundradar.data.IndexSource
 import com.hukua.fundradar.data.LimitChange
 import com.hukua.fundradar.data.LimitType
 import com.hukua.fundradar.data.Trade
@@ -32,6 +34,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
+
+/**
+ * 持仓页顶部的分段选择：只看持有、只看未持有，或者两段都看。
+ * 「持有」= 填过份额，「未持有」= 只加进来看行情的自选。
+ */
+enum class HoldingFilter(val label: String) {
+    ALL("全部"),
+    HELD("持有"),
+    UNHELD("未持有")
+}
 
 enum class FundFilter(val label: String) {
     ALL("全部"),
@@ -67,6 +79,10 @@ data class FundUiState(
     val estimatesAt: Long = 0L,
     /** 行情源整体不可用时给用户一句解释。 */
     val estimatesError: String? = null,
+    /** 这一轮指数行情走的是哪家：东方财富（主）还是腾讯（备用）。 */
+    val quoteSource: IndexSource = IndexSource.EASTMONEY,
+    /** 主源不可用，已经切到备用源。 */
+    val quoteDegraded: Boolean = false,
     /** 用户手动指定的「基金 → 指数」，覆盖按名字自动匹配。 */
     val overrides: Map<String, IndexEntry> = emptyMap(),
     /** 用户自己的持仓（份额 / 成本 / 已实现盈亏），仅持仓页使用。 */
@@ -92,6 +108,20 @@ data class FundUiState(
     val holdingFunds: List<Fund>
         get() = all.filter { holdingOf(it) != null }
             .sortedByDescending { holdingOf(it)?.marketValue(navOf(it)) ?: 0.0 }
+
+    /** 填过份额的只数 —— 列表上半部分「持有」。 */
+    val heldCount: Int get() = all.count { holdingOf(it) != null }
+
+    /** 只加进来看行情、没填份额的只数 —— 列表下半部分「未持有」。 */
+    val unheldCount: Int get() = all.size - heldCount
+
+    /** 当前筛选下、有份额的基金，按持有市值降序。 */
+    val visibleHeld: List<Fund>
+        get() = visible.filter { holdingOf(it) != null }
+            .sortedByDescending { holdingOf(it)?.marketValue(navOf(it)) ?: 0.0 }
+
+    /** 当前筛选下、只看行情的基金，保持添加顺序。 */
+    val visibleUnheld: List<Fund> get() = visible.filter { holdingOf(it) == null }
 
     /** 持仓总市值。 */
     val holdingValue: Double
@@ -259,6 +289,13 @@ class FundViewModel(
     private val _add = MutableStateFlow(AddFundState())
     val add: StateFlow<AddFundState> = _add.asStateFlow()
 
+    /**
+     * 持仓页的「全部 / 持有 / 未持有」选择。放在 ViewModel 里而不是 composable，
+     * 这样点进基金详情再返回，筛选还留在原处。
+     */
+    private val _holdFilter = MutableStateFlow(HoldingFilter.ALL)
+    val holdFilter: StateFlow<HoldingFilter> = _holdFilter.asStateFlow()
+
     private val _detail = MutableStateFlow<DetailState?>(null)
     val detail: StateFlow<DetailState?> = _detail.asStateFlow()
 
@@ -283,6 +320,10 @@ class FundViewModel(
 
     fun setFilter(filter: FundFilter) {
         _state.update { it.copy(filter = filter).derive() }
+    }
+
+    fun setHoldFilter(filter: HoldingFilter) {
+        _holdFilter.value = filter
     }
 
     // ---------------------------------------------------------- watchlist
@@ -376,7 +417,10 @@ class FundViewModel(
         val funds = _state.value.all
         if (funds.isEmpty()) return
         estimateJob?.cancel()
-        _state.update { it.copy(estimatesLoading = true) }
+        // 5 秒一轮的轮询不该让概览卡一直转圈：只有还没有任何估算时才显示 loading。
+        if (_state.value.estimates.isEmpty()) {
+            _state.update { it.copy(estimatesLoading = true) }
+        }
         estimateJob = viewModelScope.launch {
             val known = proxyCache?.second.orEmpty()
             publish(estimateRepository.safe(funds, known))
@@ -397,7 +441,9 @@ class FundViewModel(
                 estimates = batch.estimates,
                 estimatesError = batch.error,
                 estimatesLoading = false,
-                estimatesAt = batch.at.takeIf { at -> at > 0 } ?: System.currentTimeMillis()
+                estimatesAt = batch.at.takeIf { at -> at > 0 } ?: System.currentTimeMillis(),
+                quoteSource = batch.indexSource,
+                quoteDegraded = batch.degraded
             )
         }
     }

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +39,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -68,12 +70,16 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hukua.fundradar.data.BollingerBands
 import com.hukua.fundradar.data.Candle
+import com.hukua.fundradar.data.AiPrompt
+import com.hukua.fundradar.data.AiVerdict
 import com.hukua.fundradar.data.KlineSeries
 import com.hukua.fundradar.data.Macd
 import com.hukua.fundradar.data.SwingAction
+import com.hukua.fundradar.data.Trend
 import com.hukua.fundradar.data.growthText
 import com.hukua.fundradar.data.movingAverage
 import com.hukua.fundradar.data.priceText
+import com.hukua.fundradar.data.todayText
 import com.hukua.fundradar.data.volumeText
 import com.hukua.fundradar.ui.theme.LocalMarketColors
 import java.text.SimpleDateFormat
@@ -99,118 +105,6 @@ private val DIF_COLOR = Color(0xFFF5A524)
 private val DEA_COLOR = Color(0xFF2F80ED)
 
 data class MaLine(val period: Int, val color: Color, val values: List<Double?>)
-
-@Composable
-fun KlineScreen(
-    viewModel: KlineViewModel,
-    onBack: () -> Unit,
-    onOpenSettings: () -> Unit
-) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
-    val snackbar = remember { SnackbarHostState() }
-
-    // 再次进入这一页时补一下最新的几根；缓存还新鲜就不会发请求。
-    LaunchedEffect(Unit) { viewModel.load() }
-
-    LaunchedEffect(state.verdictError) {
-        val message = state.verdictError
-        if (message != null) {
-            snackbar.showSnackbar(message)
-            viewModel.consumeError()
-        }
-    }
-
-    KlineContent(
-        state = state,
-        snackbarHostState = snackbar,
-        onBack = onBack,
-        onRefresh = { viewModel.load(force = true) },
-        onSelectRange = viewModel::setRange,
-        onJudge = viewModel::judge,
-        onOpenSettings = onOpenSettings
-    )
-}
-
-/** Stateless K line screen, also used by the JVM screenshot tests. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun KlineContent(
-    state: KlineUiState,
-    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
-    onBack: () -> Unit = {},
-    onRefresh: () -> Unit = {},
-    onSelectRange: (Int) -> Unit = {},
-    onJudge: () -> Unit = {},
-    onOpenSettings: () -> Unit = {}
-) {
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                title = {
-                    Column {
-                        Text(
-                            text = state.name.ifBlank { state.code },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = state.code + " · 指数日K · BOLL(20,2) · MACD(12,26,9)",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onRefresh) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "重新加载")
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "设置")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
-                )
-            )
-        }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
-                .padding(top = 4.dp, bottom = 28.dp)
-        ) {
-            ChartCard(state = state, onPreset = onSelectRange)
-            Spacer(Modifier.height(8.dp))
-            CacheFooter(state)
-            Spacer(Modifier.height(12.dp))
-            AiSection(
-                state = state,
-                onJudge = onJudge,
-                onOpenSettings = onOpenSettings
-            )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = "K线、均线、布林带、MACD 与成交量均由天天基金公开数据计算，" +
-                    "长按图表可查看单日行情；AI 判断会带上大盘、板块、重仓与账户数据，仅供参考，不构成投资建议。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -299,6 +193,10 @@ private fun CacheFooter(state: KlineUiState) {
         append(" · ")
         append(bars)
         append(" 根日K")
+        if (state.sourceLabel.isNotBlank()) {
+            append(" · ")
+            append(state.sourceLabel)
+        }
         if (state.added > 0) {
             append(" · 本次新增 ")
             append(state.added)
@@ -308,7 +206,12 @@ private fun CacheFooter(state: KlineUiState) {
             append(" · ")
             append(time)
         }
-        append(" · 之后只拉最新 5 根")
+        // 官网是 T-1，当日那根靠东财补；补失败时把日期说清楚，别让人以为没更新。
+        val asOf = state.dataAsOf
+        if (asOf.isNotBlank() && asOf != todayText()) {
+            append(" · 最新一根 ")
+            append(asOf)
+        }
     }
     Text(
         text = text,
@@ -339,7 +242,12 @@ private val PRESET_WINDOWS = listOf(
 private const val MIN_WINDOW = 12
 
 @Composable
-private fun ChartCard(state: KlineUiState, onPreset: (Int) -> Unit) {
+internal fun ChartCard(
+    state: KlineUiState,
+    onPreset: (Int) -> Unit,
+    /** 详情页内嵌时压一压高度，别把一页全占了。 */
+    compact: Boolean = false
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -466,7 +374,14 @@ private fun ChartCard(state: KlineUiState, onPreset: (Int) -> Unit) {
                         onSelect = { selected = it },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(if (showMacd) 400.dp else 340.dp)
+                            .height(
+                                when {
+                                    compact && showMacd -> 300.dp
+                                    compact -> 250.dp
+                                    showMacd -> 400.dp
+                                    else -> 340.dp
+                                }
+                            )
                     )
                     Spacer(Modifier.height(2.dp))
                     WindowPicker(
@@ -1170,9 +1085,30 @@ private fun indexAt(
 private fun AiSection(
     state: KlineUiState,
     onJudge: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    dense: Boolean = false
 ) {
     if (!state.aiConfigured) {
+        if (dense) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "AI 波段判断需要先在设置里填接口",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = onOpenSettings,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 8.dp,
+                        vertical = 0.dp
+                    )
+                ) {
+                    Text("去设置", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            return
+        }
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
@@ -1186,8 +1122,12 @@ private fun AiSection(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "还没有配置 AI 接口。填入任意 OpenAI 兼容的地址与 Key 后，" +
-                        "就能让它结合均线和布林带判断这个指数现在适不适合做波段。",
+                    text = if (dense) {
+                        "填好 AI 地址与 Key 后，可以让它结合均线与布林带判断这个指数适不适合做波段。"
+                    } else {
+                        "还没有配置 AI 接口。填入任意 OpenAI 兼容的地址与 Key 后，" +
+                            "就能让它结合均线和布林带判断这个指数现在适不适合做波段。"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1234,29 +1174,30 @@ private fun AiSection(
     if (verdict != null) {
         Spacer(Modifier.height(12.dp))
         VerdictCard(
-            action = verdict.action,
-            confidence = verdict.confidence,
-            reason = verdict.reason,
-            risk = verdict.risk,
-            timeText = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(verdict.at))
+            verdict = verdict,
+            timeText = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(verdict.at)),
+            prompt = state.prompt
         )
     }
 }
 
 @Composable
 private fun VerdictCard(
-    action: SwingAction,
-    confidence: Int,
-    reason: String,
-    risk: String,
-    timeText: String
+    verdict: AiVerdict,
+    timeText: String,
+    prompt: String
 ) {
     val market = LocalMarketColors.current
+    val action = verdict.action
     val accent = when (action) {
         SwingAction.BUY -> market.up
         SwingAction.SELL -> market.down
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    var showPrompt by remember { mutableStateOf(false) }
+    // 结论有保质期：买入给 10 个交易日，卖出和观望给 5 个。过期后本地不再
+    // 要求「涨 15 分」才准改口，界面上也要说清楚，否则用户会一直照着旧结论做。
+    val validDays = if (action == SwingAction.BUY) AiPrompt.VALID_DAYS_BUY else AiPrompt.VALID_DAYS_OTHER
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1280,10 +1221,18 @@ private fun VerdictCard(
                 }
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    text = "置信度 $confidence%",
+                    text = "置信度 ${verdict.confidence}%",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (verdict.trend != Trend.UNKNOWN) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "趋势 ${verdict.trend.label}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Spacer(Modifier.weight(1f))
                 Text(
                     text = timeText,
@@ -1292,28 +1241,149 @@ private fun VerdictCard(
                 )
             }
 
-            if (reason.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "有效期 $validDays 个交易日，到期后按新数据重评（不再沿用旧结论）",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // 本地把它拦下来的时候要说清楚，否则用户会觉得「怎么没变化」。
+            if (verdict.kept) {
+                Spacer(Modifier.height(10.dp))
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh
+                ) {
+                    Text(
+                        text = buildString {
+                            append("维持上次结论")
+                            val intended = verdict.intended
+                            if (intended != SwingAction.UNKNOWN && intended != action) {
+                                append("：模型这次倾向「").append(intended.label).append("」，但证据没到切换门槛")
+                            } else {
+                                append("：数据没有实质变化")
+                            }
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                    )
+                }
+            }
+
+            if (verdict.reason.isNotBlank()) {
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = reason,
+                    text = verdict.reason,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }
-            if (risk.isNotBlank()) {
+            if (verdict.risk.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "风险提示：$risk",
+                    text = "风险提示：${verdict.risk}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Spacer(Modifier.height(10.dp))
-            Text(
-                text = "AI 生成，仅供参考，不构成投资建议",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "AI 生成，仅供参考，不构成投资建议",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                if (prompt.isNotBlank()) {
+                    TextButton(
+                        onClick = { showPrompt = !showPrompt },
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 8.dp,
+                            vertical = 0.dp
+                        )
+                    ) {
+                        Text(
+                            if (showPrompt) "收起" else "查看本轮数据",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
+
+            // 直接展开在卡片里：用户能一眼看到模型拿到了什么、被立了什么规矩，
+            // 不用跳弹窗，也方便截图留证。
+            if (showPrompt && prompt.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh
+                ) {
+                    Text(
+                        text = prompt,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(10.dp)
+                    )
+                }
+            }
         }
+    }
+}
+
+/**
+ * 嵌在基金详情里的 K 线块：图表 + 区间滑块 + 数据时间 + AI 判断。
+ *
+ * 以前是「跟踪标的」卡片上的一个按钮，点开再进一整页；现在直接铺在详情页里，
+ * 想看均线和布林带不用再跳一次。高度压到 300dp（带 MACD），外层页面照常滚动。
+ */
+@Composable
+fun KlineCard(
+    state: KlineUiState,
+    modifier: Modifier = Modifier,
+    onSelectRange: (Int) -> Unit = {},
+    onRefresh: () -> Unit = {},
+    onJudge: () -> Unit = {},
+    onOpenSettings: () -> Unit = {}
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "跟踪指数 K 线",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = buildString {
+                        append(state.name.ifBlank { state.code })
+                        if (state.name.isNotBlank() && state.code.isNotBlank()) append(" ")
+                        if (state.name.isNotBlank()) append(state.code)
+                        append(" · 日K · BOLL(20,2) · MACD")
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(onClick = onRefresh) {
+                Icon(Icons.Filled.Refresh, contentDescription = "重新加载 K 线")
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        ChartCard(state = state, onPreset = onSelectRange, compact = true)
+        CacheFooter(state)
+        Spacer(Modifier.height(10.dp))
+        AiSection(
+            state = state,
+            onJudge = onJudge,
+            onOpenSettings = onOpenSettings,
+            dense = true
+        )
     }
 }

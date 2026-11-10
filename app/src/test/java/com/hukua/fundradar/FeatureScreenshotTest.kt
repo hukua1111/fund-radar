@@ -5,12 +5,20 @@ import android.graphics.Canvas
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.unit.dp
 import com.hukua.fundradar.data.AiConfig
@@ -23,25 +31,21 @@ import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.FundExtra
 import com.hukua.fundradar.data.Holding
 import com.hukua.fundradar.data.IndexEntry
-import com.hukua.fundradar.data.IndexQuote
 import com.hukua.fundradar.data.KlineSeries
 import com.hukua.fundradar.data.KlineSource
+import com.hukua.fundradar.data.RealtimeQuote
 import com.hukua.fundradar.data.SwingAction
-import com.hukua.fundradar.data.TrackedIndex
-import com.hukua.fundradar.ui.AddIndexSheetContent
+import com.hukua.fundradar.data.Trend
 import com.hukua.fundradar.ui.CostInput
 import com.hukua.fundradar.ui.DetailState
 import com.hukua.fundradar.ui.FundDetailScreen
 import com.hukua.fundradar.ui.FundRadarContent
 import com.hukua.fundradar.ui.FundUiState
+import com.hukua.fundradar.ui.HoldingFilter
 import com.hukua.fundradar.ui.HoldingMode
 import com.hukua.fundradar.ui.HoldingSheetContent
 import com.hukua.fundradar.ui.HoldingSheetState
-import com.hukua.fundradar.ui.IndexAddState
-import com.hukua.fundradar.ui.IndexItem
-import com.hukua.fundradar.ui.IndexStrip
-import com.hukua.fundradar.ui.IndexUiState
-import com.hukua.fundradar.ui.KlineContent
+import com.hukua.fundradar.ui.KlineCard
 import com.hukua.fundradar.ui.KlineUiState
 import com.hukua.fundradar.ui.SettingsContent
 import com.hukua.fundradar.ui.TrackIndexSheetContent
@@ -70,10 +74,10 @@ class FeatureScreenshotTest {
     val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun klineScreenWithVerdict() {
+    fun klineCardWithVerdict() {
         compose.setContent {
             FundRadarTheme(darkTheme = false) {
-                KlineContent(state = sampleState(verdict = sampleVerdict()))
+                KlineInline(state = sampleState(verdict = sampleVerdict()))
             }
         }
         compose.waitForIdle()
@@ -82,10 +86,10 @@ class FeatureScreenshotTest {
     }
 
     @Test
-    fun klineScreenDark() {
+    fun klineCardDark() {
         compose.setContent {
             FundRadarTheme(darkTheme = true) {
-                KlineContent(state = sampleState(verdict = sampleVerdict()))
+                KlineInline(state = sampleState(verdict = sampleVerdict()))
             }
         }
         compose.waitForIdle()
@@ -93,14 +97,63 @@ class FeatureScreenshotTest {
     }
 
     @Test
-    fun klineScreenWithoutAi() {
+    fun klineCardWithoutAi() {
         compose.setContent {
             FundRadarTheme(darkTheme = false) {
-                KlineContent(state = sampleState(verdict = null, aiConfigured = false))
+                KlineInline(state = sampleState(verdict = null, aiConfigured = false))
             }
         }
         compose.waitForIdle()
         save("kline-no-ai")
+    }
+
+    /** 结论被本地拦下来：卡片上要说清楚「模型想买，但没有到切换门槛」。 */
+    @Test
+    fun klineCardKeptVerdict() {
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                KlineInline(state = sampleState(verdict = keptVerdict()))
+            }
+        }
+        compose.waitForIdle()
+        save("kline-kept")
+        dump("tree-kline-kept.txt")
+    }
+
+    /** 「查看本轮数据」展开后的样子：模型拿到了什么、被立了什么规矩，一眼可见。 */
+    @Test
+    @Config(qualifiers = "w411dp-h2400dp-xxhdpi")
+    fun aiPromptDialog() {
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                KlineInline(
+                    state = sampleState(
+                        verdict = sampleVerdict(),
+                        prompt = "【system】\n你是基金波段交易助手。\n\n【user】\n指数：光伏产业（931151）\n" +
+                            "技术指标基准日：2026-11-09（已收盘定型）\n【八、上一次的判断】\n上一次：观望（置信度 62）"
+                    )
+                )
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("查看本轮数据").performScrollTo().performClick()
+        compose.waitForIdle()
+        // 展开后按钮变成「收起」，说明提示词区确实渲染出来了。
+        compose.onNodeWithText("收起").assertExists()
+        save("kline-prompt-expanded")
+    }
+
+    /** 详情页里的内嵌形态：图表块 + AI，外面套一层页面留白。 */
+    @Composable
+    private fun KlineInline(state: KlineUiState) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            KlineCard(state = state)
+        }
     }
 
     @Test
@@ -126,10 +179,8 @@ class FeatureScreenshotTest {
         dump("tree-settings.txt")
     }
 
-    @Test
-    @Config(qualifiers = "w411dp-h1400dp-xxhdpi")
-    fun portfolioWithIndexStrip() {
-        // 指数并进持仓页之后的完整样子：概览卡 → 相关指数横滑条 → 基金卡。
+    /** 持仓页样例：两只持有 + 一只只跟行情。 */
+    private fun portfolioState(): FundUiState {
         val coal = Fund(
             code = "008280",
             name = "国泰中证煤炭ETF联接C",
@@ -150,117 +201,88 @@ class FeatureScreenshotTest {
             navDate = "2026-11-05",
             trackIndex = "中证白酒指数"
         )
-        val funds = listOf(coal, liquor)
+        val semi = Fund(
+            code = "008888",
+            name = "华夏国证半导体芯片ETF联接C",
+            type = "指数型-股票",
+            nav = 1.2856,
+            dayGrowth = 1.42,
+            buyStatus = "开放申购",
+            navDate = "2026-11-05",
+            trackIndex = "国证半导体芯片指数"
+        )
+        val funds = listOf(coal, liquor, semi)
+        return FundUiState(
+            all = funds,
+            visible = funds,
+            scope = FundScope.PORTFOLIO,
+            loading = false,
+            watchlistEmpty = false,
+            estimates = mapOf(
+                coal.code to Estimate(
+                    percent = -3.21,
+                    nav = 2.0841,
+                    source = EstimateSource.INDEX,
+                    basis = "中证煤炭",
+                    quoteTime = "11-06 14:02",
+                    etfCode = "515220",
+                    etfName = "煤炭ETF国泰",
+                    etfPercent = -3.14
+                ),
+                liquor.code to Estimate(
+                    percent = -1.18,
+                    nav = 1.0289,
+                    source = EstimateSource.INDEX,
+                    basis = "中证白酒",
+                    quoteTime = "11-06 14:02"
+                ),
+                semi.code to Estimate(
+                    percent = 1.42,
+                    nav = 1.3039,
+                    source = EstimateSource.INDEX,
+                    basis = "国证半导体芯片",
+                    quoteTime = "11-06 14:02"
+                )
+            ),
+            holdings = mapOf(
+                coal.code to Holding(shares = 702.97, cost = 1602.42),
+                liquor.code to Holding(shares = 3000.0, cost = 3120.0)
+            )
+        )
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h1300dp-xxhdpi")
+    fun portfolioGroupedByHolding() {
+        // 持仓页：概览卡 → 分段选择（全部/持有/未持有）→ 两段基金。
+        compose.setContent {
+            FundRadarTheme(darkTheme = false) {
+                FundRadarContent(state = portfolioState())
+            }
+        }
+        compose.waitForIdle()
+        save("portfolio-grouped")
+        dump("tree-portfolio-grouped.txt")
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h900dp-xxhdpi")
+    fun portfolioHeldOnly() {
+        // 分段选择切到「持有」：只剩持有一段，分组标题也不再铺。
         compose.setContent {
             FundRadarTheme(darkTheme = false) {
                 FundRadarContent(
-                    state = FundUiState(
-                        all = funds,
-                        visible = funds,
-                        scope = FundScope.PORTFOLIO,
-                        loading = false,
-                        watchlistEmpty = false,
-                        estimates = mapOf(
-                            coal.code to Estimate(
-                                percent = -3.21,
-                                nav = 2.0841,
-                                source = EstimateSource.INDEX,
-                                basis = "中证煤炭",
-                                quoteTime = "11-06 14:02",
-                                etfCode = "515220",
-                                etfName = "煤炭ETF国泰",
-                                etfPercent = -3.14
-                            ),
-                            liquor.code to Estimate(
-                                percent = -1.18,
-                                nav = 1.0289,
-                                source = EstimateSource.INDEX,
-                                basis = "中证白酒",
-                                quoteTime = "11-06 14:02"
-                            )
-                        ),
-                        holdings = mapOf(
-                            coal.code to Holding(shares = 702.97, cost = 1602.42),
-                            liquor.code to Holding(shares = 3000.0, cost = 3120.0)
-                        )
-                    ),
-                    indices = sampleIndexState()
+                    state = portfolioState(),
+                    holdFilter = HoldingFilter.HELD
                 )
             }
         }
         compose.waitForIdle()
-        save("portfolio-indices")
-        dump("tree-portfolio-indices.txt")
+        save("portfolio-held-only")
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
-    fun indexStrip() {
-        compose.setContent {
-            FundRadarTheme(darkTheme = false) {
-                Surface(color = MaterialTheme.colorScheme.background) {
-                    IndexStrip(
-                        state = sampleIndexState(),
-                        onOpenKline = { _, _ -> },
-                        onAddClick = {},
-                        onRemove = {},
-                        modifier = Modifier.padding(16.dp)
-                    )
-                }
-            }
-        }
-        compose.waitForIdle()
-        save("index-strip")
-        dump("tree-index-strip.txt")
-    }
-
-    @Test
-    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
-    fun indexStripEmpty() {
-        compose.setContent {
-            FundRadarTheme(darkTheme = false) {
-                Surface(color = MaterialTheme.colorScheme.background) {
-                    IndexStrip(
-                        state = IndexUiState(loading = false, watchlistEmpty = true),
-                        onOpenKline = { _, _ -> },
-                        onAddClick = {},
-                        onRemove = {},
-                        modifier = Modifier.padding(16.dp)
-                    )
-                }
-            }
-        }
-        compose.waitForIdle()
-        save("index-strip-empty")
-    }
-
-    @Test
-    @Config(qualifiers = "w411dp-h891dp-xxhdpi")
-    fun addIndexSheet() {
-        compose.setContent {
-            FundRadarTheme(darkTheme = false) {
-                AddIndexSheetContent(
-                    state = IndexAddState(
-                        open = true,
-                        query = "白酒",
-                        results = listOf(
-                            IndexEntry("399997", 0, "中证白酒"),
-                            IndexEntry("399996", 0, "中证白酒指数")
-                        ),
-                        adding = "399996"
-                    ),
-                    onQueryChange = {},
-                    onAddIndex = {}
-                )
-            }
-        }
-        compose.waitForIdle()
-        save("add-index-sheet")
-        dump("tree-add-index.txt")
-    }
-
-    @Test
-    @Config(qualifiers = "w411dp-h1100dp-xxhdpi")
+    @Config(qualifiers = "w411dp-h1700dp-xxhdpi")
     fun fundDetailScreen() {
         val fund = Fund(
             code = "025833",
@@ -303,6 +325,21 @@ class FeatureScreenshotTest {
                     showLimitBadge = false,
                     removeLabel = "从持仓移除",
                     showFundFacts = false,
+                    trackedIndex = IndexEntry("931994", 2, "电网设备主题"),
+                    klineState = sampleState(verdict = null).copy(
+                        code = "931994",
+                        name = "电网设备主题",
+                        secid = "2.931994",
+                        aiConfigured = false,
+                        quote = RealtimeQuote(
+                            symbol = "2.931994",
+                            name = "电网设备主题",
+                            price = 2402.95,
+                            prevClose = 2390.80,
+                            changePercent = 0.51,
+                            time = "11-10 12:05"
+                        )
+                    ),
                     holding = Holding(
                         shares = 12_000.0,
                         cost = 11_800.0,
@@ -554,52 +591,34 @@ class FeatureScreenshotTest {
         dump("tree-track-picker.txt")
     }
 
-    private fun sampleIndexState(): IndexUiState {
-        val coal = IndexEntry("399998", 0, "中证煤炭")
-        val liquor = IndexEntry("399997", 0, "中证白酒")
-        val semi = IndexEntry("980017", 0, "国证半导体芯片")
-        val hand = IndexEntry("000300", 1, "沪深300")
-        return IndexUiState(
-            loading = false,
-            items = listOf(
-                IndexItem(
-                    tracked = TrackedIndex(coal, "中证煤炭指数", listOf("008279", "161724")),
-                    quote = IndexQuote(coal, 2292.63, 2.39, "2026-11-05")
-                ),
-                IndexItem(
-                    tracked = TrackedIndex(liquor, "中证白酒指数", listOf("161725", "012414")),
-                    quote = IndexQuote(liquor, 8941.20, -1.27, "2026-11-05")
-                ),
-                IndexItem(
-                    tracked = TrackedIndex(
-                        semi,
-                        "国证半导体芯片指数",
-                        listOf("008888"),
-                        overridden = true
-                    ),
-                    quote = IndexQuote(semi, 6120.55, 0.0, "2026-11-05")
-                ),
-                IndexItem(
-                    tracked = TrackedIndex(hand, "手动添加", emptyList(), manual = true),
-                    quote = IndexQuote(hand, 4012.88, 0.64, "2026-11-05")
-                )
-            ),
-            updatedAt = System.currentTimeMillis()
-        )
-    }
-
     private fun sampleVerdict() = AiVerdict(
         action = SwingAction.BUY,
         confidence = 72,
         reason = "MA5 上穿 MA20，价格站在 MA20 上方 2.1%，近 5 日连续放量反弹。",
         risk = "场外申赎 T+1，注意仓位",
         raw = "",
-        at = System.currentTimeMillis()
+        at = System.currentTimeMillis(),
+        trend = Trend.UP
+    )
+
+    /** 本地把模型的改口拦下来时的样子：按钮还在，理由是「维持」。 */
+    private fun keptVerdict() = AiVerdict(
+        action = SwingAction.HOLD,
+        confidence = 63,
+        reason = "维持：收盘仍贴在 MA20 下方 0.8%，MACD 绿柱没有转向，量能也没放大。",
+        risk = "若放量跌破 2100，趋势才真正转弱",
+        raw = "",
+        at = System.currentTimeMillis(),
+        trend = Trend.RANGE,
+        kept = true,
+        intended = SwingAction.BUY,
+        previous = SwingAction.HOLD
     )
 
     private fun sampleState(
         verdict: AiVerdict?,
-        aiConfigured: Boolean = true
+        aiConfigured: Boolean = true,
+        prompt: String = ""
     ) = KlineUiState(
         code = "161725",
         name = "招商中证白酒指数(LOF)A",
@@ -610,7 +629,10 @@ class FeatureScreenshotTest {
         bars = 160,
         added = 1,
         fetchedAt = System.currentTimeMillis(),
+        sourceLabel = "中证指数官网 + 东方财富",
+        dataAsOf = "2026-11-05",
         verdict = verdict,
+        prompt = prompt,
         aiConfigured = aiConfigured
     )
 

@@ -36,10 +36,12 @@ internal object Net {
         referer: String = "",
         charset: Charset = Charsets.UTF_8,
         readTimeoutMs: Int = 12_000,
+        /** 实时轮询要快失败，连接超时跟着读超时一起收。 */
+        connectTimeoutMs: Int = 8_000,
         userAgent: String = UA
     ): String = withContext(Dispatchers.IO) {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8_000
+            connectTimeout = connectTimeoutMs
             readTimeout = readTimeoutMs
             requestMethod = "GET"
             setRequestProperty("User-Agent", userAgent)

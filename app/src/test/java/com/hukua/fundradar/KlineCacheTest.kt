@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.hukua.fundradar.data.Candle
 import com.hukua.fundradar.data.KlineSeries
 import com.hukua.fundradar.data.KlineSource
+import com.hukua.fundradar.data.KlineMeta
 import com.hukua.fundradar.data.KlineStore
 import com.hukua.fundradar.data.mergeCandles
 import org.junit.Assert.assertEquals
@@ -51,6 +52,59 @@ class KlineCacheTest {
         assertEquals("中证白酒", read.series.name)
         assertEquals(1.1, read.series.candles[1].close, 1e-9)
         assertEquals(1_700_000_000_000L, read.fetchedAt)
+    }
+
+    @Test
+    fun metaSurvivesRoundTrip() {
+        val store = KlineStore(context)
+        val secid = "2.931151"
+        store.clear(secid)
+        val series = KlineSeries(
+            code = "931151",
+            name = "光伏产业",
+            source = KlineSource.EXCHANGE,
+            candles = listOf(candle("2026-11-09", 2154.71)),
+            meta = KlineMeta(
+                pe = 32.96,
+                constituents = 50,
+                historySource = "中证指数官网",
+                tailSource = "东方财富",
+                asOf = "2026-11-09"
+            )
+        )
+
+        store.write(secid, series, 1L)
+        val read = requireNotNull(store.read(secid))
+        assertEquals(32.96, read.series.meta.pe!!, 1e-9)
+        assertEquals(50, read.series.meta.constituents)
+        assertEquals("中证指数官网", read.series.meta.historySource)
+        assertEquals("东方财富", read.series.meta.tailSource)
+    }
+
+    @Test
+    fun legacyCacheWithoutMetaIsMarkedForRebuild() {
+        // 1.12.0 及以前的缓存文件没有 meta 字段，读出来 historySource 为空，
+        // KlineRepository 据此判断「重建一次」，新版才能拿到 800 根和 PE。
+        val store = KlineStore(context)
+        val secid = "1.000300"
+        store.clear(secid)
+        val series = KlineSeries(
+            code = "000300",
+            name = "沪深300",
+            source = KlineSource.EXCHANGE,
+            candles = listOf(candle("2026-11-09", 4056.11))
+        )
+        store.write(secid, series, 1L)
+        // 模拟 1.12.0 的旧格式：整个 meta 节点都不存在。
+        val file = java.io.File(context.filesDir, "kline/1_000300.json")
+        file.writeText(
+            """{"code":"000300","name":"沪深300","fetchedAt":1,""" +
+                """"candles":[["2026-11-09",4056.11,4056.11,4057.0,4055.0,1000.0]]}"""
+        )
+
+        val read = requireNotNull(store.read(secid))
+        assertEquals(1, read.series.candles.size)
+        assertTrue(read.series.meta.historySource.isBlank())
     }
 
     @Test

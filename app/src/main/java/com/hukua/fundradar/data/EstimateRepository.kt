@@ -18,7 +18,11 @@ data class EstimateBatch(
     val estimates: Map<String, Estimate> = emptyMap(),
     /** 行情源整体不可用时的说明，用来在界面上给一句解释。 */
     val error: String? = null,
-    val at: Long = 0L
+    val at: Long = 0L,
+    /** 这一轮指数行情走的是哪家：东财（主）还是腾讯（备用）。 */
+    val indexSource: IndexSource = IndexSource.EASTMONEY,
+    /** 主源不可用、已经切到备用源。 */
+    val degraded: Boolean = false
 )
 
 /**
@@ -83,18 +87,24 @@ class EstimateRepository(context: Context) {
             position?.stocks?.forEach { symbols += exchangeSymbol(it.code, it.market) }
         }
 
-        // 跟踪标的指数单独走东财：腾讯只认得 000xxx / 399xxx，中证自有的
-        // 930xxx / 931xxx（如 931994 电网设备主题）在腾讯那边查不到。
+        // 跟踪标的指数走东财（主）/ 腾讯（备）：腾讯只认得 000xxx / 399xxx，
+        // 中证自有的 930xxx / 931xxx（如 931994 电网设备主题）得靠东财。
         val indexEntries = resolved.mapNotNull { (fund, _) -> proxies[fund.code] }
             .distinctBy { it.secid }
-        val indexQuotes = if (indexEntries.isEmpty()) {
-            emptyMap()
+        val indexBatch = if (indexEntries.isEmpty()) {
+            IndexQuoteBatch()
         } else {
-            runCatching { IndexQuoteApi.fetch(indexEntries) }.getOrDefault(emptyMap())
+            runCatching { IndexQuoteApi.fetchBatch(indexEntries) }.getOrDefault(IndexQuoteBatch())
         }
+        val indexQuotes = indexBatch.quotes
 
         if (symbols.isEmpty() && indexQuotes.isEmpty()) {
-            return@withContext EstimateBatch(error = "没有可用的持仓或指数数据", at = now)
+            return@withContext EstimateBatch(
+                error = indexBatch.error ?: "没有可用的持仓或指数数据",
+                at = now,
+                indexSource = indexBatch.source,
+                degraded = indexBatch.degraded
+            )
         }
 
         val quotes = if (symbols.isEmpty()) emptyMap() else QuoteApi.fetch(symbols)
@@ -111,7 +121,13 @@ class EstimateRepository(context: Context) {
             }
             estimateFund(fund, position, quotes, proxy)?.let { result[fund.code] = it }
         }
-        EstimateBatch(estimates = result, error = error, at = now)
+        EstimateBatch(
+            estimates = result,
+            error = error,
+            at = now,
+            indexSource = indexBatch.source,
+            degraded = indexBatch.degraded
+        )
     }
 
     // ------------------------------------------------------------ cache
