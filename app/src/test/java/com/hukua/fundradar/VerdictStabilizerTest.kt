@@ -152,17 +152,30 @@ class VerdictStabilizerTest {
     }
 
     @Test
-    fun rangeTrendCannotBuy() {
-        // 模型自己说震荡又要买入，自相矛盾：按震荡处理，置信度压到 55 以下。
+    fun rangeTrendBuyIsKeptButCapped() {
+        // 1.15 起震荡档位允许「启动买点」：动作保留，置信度压到 55 以下。
+        // 消融里 5 例被判 RANGE 强制观望，后续 20 日合计 +43%，就是旧逻辑拦掉的。
         val (out, _) = VerdictStabilizer.stabilize(
             verdict(SwingAction.BUY, 88, Trend.RANGE),
-            memory(SwingAction.HOLD, 60, Trend.RANGE, switches = 1),
+            memory(SwingAction.HOLD, 60, Trend.RANGE),
+            dayChangePct = 3.0,
+            today = today
+        )
+        assertEquals(SwingAction.BUY, out.action)
+        assertTrue(out.confidence <= 55)
+    }
+
+    @Test
+    fun rangeTrendSellStillBecomesHold() {
+        // 卖出不放行：震荡里的卖出多半是追跌。
+        val (out, _) = VerdictStabilizer.stabilize(
+            verdict(SwingAction.SELL, 88, Trend.RANGE),
+            memory(SwingAction.BUY, 60, Trend.UP),
             dayChangePct = 3.0,
             today = today
         )
         assertEquals(SwingAction.HOLD, out.action)
-        // 88 分被压下来：震荡档位下不该给出高置信度的买入。
-        assertTrue(out.confidence <= 60)
+        assertTrue(out.confidence <= 55)
     }
 
     @Test

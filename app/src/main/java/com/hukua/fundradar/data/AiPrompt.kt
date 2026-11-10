@@ -32,6 +32,14 @@ internal object AiPrompt {
     /** 与 [VerdictStabilizer] 用同一套阈值，提示词和本地拦截不能自相矛盾。 */
     private const val QUIET_BAND_PCT = VerdictStabilizer.QUIET_DAY_PCT
 
+    /**
+     * trend 档位的分界：收盘离 MA20 超过这个百分比才算走出震荡。
+     *
+     * 1.14 用的是 1%，实测太钝 —— 40 例消融里 5 例被卡在 RANGE，后续 20 日合计
+     * +43%，全被「RANGE 只能 HOLD」吃掉了。1.15 收到 0.5%，和规则 3 的措辞一致。
+     */
+    private const val TREND_BAND_PCT = 0.5
+
     /** 大盘开关：6 个宽基里至少这么多个下跌…… */
     private const val MARKET_DOWN_COUNT = 5
 
@@ -189,34 +197,19 @@ internal object AiPrompt {
                     "（" + volumeHint(ratio) + "）"
             )
 
-            // 置信度三项硬条件：档位由模型判，量能和相对强弱本地先算好摆出来，
-            // 免得它一边说「缩量」一边给 75 分。
+            // 量能和相对强弱本地算好摆出来，避免它一边说「缩量」一边给 75 分。
+            // 1.15 去掉了「三项不同时满足就 ≤60」的硬封顶：消融里这条一次都没改变
+            // 动作，却绑死了量能门槛（机械回测 −3.53pp），只留事实不加命令。
             appendLine()
-            appendLine("【四·补充】置信度上限（本地已算好，不要自行放宽）")
+            appendLine("【四·补充】量能与相对强弱（本地算好的事实，不设硬上限）")
             val ratioForCap = series.volumeRatio()
-            val volumeBuyOk = (ratioForCap ?: 0.0) >= 1.1
-            val volumeSellOk = (ratioForCap ?: 0.0) >= 1.0 || (vsMa20 != null && vsMa20 <= -2.0)
             val ratioText = String.format(Locale.US, "%.2f", ratioForCap ?: 0.0)
-            appendLine(
-                "买入方向的量能：" + if (volumeBuyOk) {
-                    "满足（5日均量比 $ratioText，有放量）"
-                } else {
-                    "不满足（5日均量比 $ratioText，买入要 ≥1.10）"
-                }
-            )
-            appendLine(
-                "卖出方向的量能：" + if (volumeSellOk) {
-                    "满足（放量或已跌破 MA20 超 2%）"
-                } else {
-                    "不满足（缩量且跌幅不够，卖出要 ≥1.00 的量比或跌破 MA20 2% 以上）"
-                }
-            )
+            appendLine("5日均量比：$ratioText（" + volumeHint(ratioForCap) + "）")
             val relCapText = context.relative20?.let {
                 String.format(Locale.US, "%+.2f", it) + " 个百分点，" +
-                    (if (it >= 0) "强于大盘（支持买入）" else "弱于大盘（支持卖出）")
-            } ?: "无数据，这一项算不满足"
+                    (if (it >= 0) "强于大盘" else "弱于大盘")
+            } ?: "无数据"
             appendLine("20日相对沪深300：$relCapText")
-            appendLine("三项（trend 档位成立 + 量能配合 + 相对强弱同向）没有同时满足时，confidence 必须 ≤ 60。")
 
             appendLine()
             appendLine("最近10个交易日（日期 开高低收）：")
@@ -314,36 +307,23 @@ internal object AiPrompt {
         }
 
         val rules = buildString {
-            appendLine("请判断当前更适合「波段买入」「波段卖出」还是「观望」。必须遵守下面这些规则：")
-            appendLine("1. 按 大盘 → 板块相对强弱 → 标的自身技术面 → 我的账户 的顺序逐层分析，不要只看一条均线。")
-            appendLine("2. 技术面同时看：MA5/10/20/60 的排列、MACD 的 DIF/DEA 位置与柱线走势、布林带位置、近 5/20/60 日涨跌、量能。")
-            appendLine("3. 【大盘环境】第一段给了普跌/普涨标注，它是背景，不是命令：")
-            appendLine("   - 普跌日：不许用「跌多了会反弹」当买入理由；要给 BUY 必须有标的自身证据（20日相对强弱为正 + 量能配合）。")
-            appendLine("   - 普涨日：不许用「大盘好」当买入理由；也不必因为大盘涨就不敢卖。")
-            appendLine("   - 任何时候，「大盘涨跌」本身都不能单独作为 action 的理由。")
-            appendLine("4. 板块明显弱于沪深300（20日相对为负且超过 3 个百分点）时，即使标的形态不错也要降低买入置信度。")
-            appendLine("5. 结合我的成本：深套时不要简单劝割，浮盈时也要说明回撤风险；没有持仓就只判断该不该建仓。")
-            appendLine("6. 场外基金申赎有确认延迟，判断要偏保守。")
-            appendLine("7. 「盘中实时」那一段不是定型数据，只能用来描述当前位置，不能作为改变结论的理由。")
-            appendLine("8. 必须给出趋势档位 trend，按这个标准划分（MACD 看「最近两根柱有没有连续缩短」，不要求单根放大）：")
-            appendLine("   - DOWN：收盘在 MA20 下方超过 1%，且 MA5 < MA10，且 MACD 柱为负、最近两根柱不是连续缩短（绿柱还没衰竭）；")
-            appendLine("   - UP：收盘在 MA20 上方超过 1%，且 MA5 > MA10，且 MACD 柱为正、最近两根柱不是连续缩短（红柱还没衰竭）；")
-            appendLine("   - RANGE：不满足上面两条的都算震荡（贴线 ±1%、均线纠缠、柱在零轴附近来回）。")
-            appendLine("9. trend 和 action 必须自洽：trend=RANGE 时 action 只能是 HOLD；trend=UP 时不能给 SELL；trend=DOWN 时不能给 BUY。")
-            appendLine("10. 置信度按「四·补充」末尾的三项逐项核对：三项全满足才可以超过 60 分；缺一项上限 60，缺两项上限 50，并在 reason 里写明缺哪一项。")
-            appendLine("11. 有上一次结论且它还在有效期内时，要改变方向必须能在数据里指出至少一项实质变化，例如：收盘价首次上穿/下穿 MA20 且偏离 1% 以上；MACD 柱由负转正或由正转负并且连续两根同向；20 日相对沪深300 由强转弱或由弱转强。指不出来就维持上一次的 action，置信度不得高于上次 +10，并在 reason 开头写「维持：」。")
-            appendLine("12. 结论有有效期：BUY 默认 10 个交易日，SELL 和 HOLD 默认 5 个交易日。上一次结论已经过期的，按新数据重新判断，不必维持，但 reason 要说明和上次相比变了什么。")
-            appendLine("13. 给 HOLD 时必须写清「在等什么」：具体到某个价格站上/跌破哪条均线、或某个指标转向，并说明条件满足后该做什么。写不出具体条件，说明这次观望没有依据。")
-            appendLine("14. 缺失的数据要明确说明，不要脑补消息面。")
-            if (sameDaySwitches > 0) {
-                appendLine("15. 今天已经改过 $sameDaySwitches 次方向。除非新结论的置信度 ≥ 75 且 trend 与 action 同向，否则必须维持上一次的结论。")
-            } else {
-                appendLine("15. 同一天内不要反复改口；盘中几个点的波动不足以改变结论。")
-            }
+            appendLine("请判断当前更适合「波段买入」「波段卖出」还是「观望」。")
+            appendLine()
+            appendLine("1. 按 大盘 → 板块 → 标的自身技术面 → 我的账户 的顺序看，不要只看一条均线。")
+            appendLine("2. 技术面同时看：MA5/10/20/60 的排列、MACD 的 DIF/DEA 与柱线走向、布林带位置、近 5/20/60 日涨跌、量能。")
+            appendLine("3. 给出趋势档位 trend（MACD 看「最近两根柱有没有连续缩短」，不要求单根放大）：")
+            appendLine("   - UP：收盘在 MA20 上方超过 0.5%，且 MA5 > MA10，且 MACD 柱为正、最近两根没有连续缩短；")
+            appendLine("   - DOWN：收盘在 MA20 下方超过 0.5%，且 MA5 < MA10，且 MACD 柱为负、最近两根没有连续缩短；")
+            appendLine("   - RANGE：不满足上面两条的都算震荡。")
+            appendLine("4. trend=UP 时不给 SELL，trend=DOWN 时不给 BUY。trend=RANGE 时可以给 BUY，但必须写清「这次买的是启动不是趋势」，并点明触发条件（哪条均线被站上、哪个指标刚转向）；写不出来就给 HOLD。")
+            appendLine("5. 大盘只作背景，不能单独当理由：普跌日不许拿「跌多了会反弹」当买入理由，普涨日不许拿「大盘好」当买入理由，也不必因为大盘涨就不敢卖。")
+            appendLine("6. 有上次结论且还在有效期内（BUY 10 个交易日，SELL/HOLD 5 个）时，要改方向必须能在数据里指出一项实质变化（首次上穿/下穿 MA20 超 0.5%、MACD 柱转色且连续两根同向、20 日相对沪深300 由强转弱或反向）；指不出来就维持上次的 action，置信度不得高于上次 +10，理由开头写「维持：」。")
+            appendLine("7. 给 HOLD 必须写清在等什么：站上或跌破哪条均线、哪个指标转向，以及条件满足后做什么。")
+            appendLine("8. 缺失的数据要说明，不要编造消息面。")
             append("只输出一个 JSON 对象，不要 markdown 代码块，不要多余文字：")
             append(
                 """{"action":"BUY|SELL|HOLD","trend":"UP|RANGE|DOWN","confidence":72,""" +
-                    """"reason":"80字以内中文理由，需说明大盘与板块的相对强弱，HOLD 要写清在等什么","risk":"30字以内，买入要写失效价（跌破X就不再成立）"}"""
+                    """"reason":"80字以内，需说明大盘与板块的相对强弱，HOLD 要写清在等什么","risk":"30字以内，买入要写失效价（跌破X就不再成立）"}"""
             )
         }
 
@@ -396,9 +376,8 @@ internal object AiPrompt {
         return JudgePrompt(system = BATCH_SYSTEM, user = user)
     }
 
-    private val SYSTEM = "你是一名谨慎的基金波段交易助手。你只依据用户给出的数据判断，" +
-        "不编造消息面，不给绝对化保证。你的结论要稳定：数据没有实质变化时就维持上一次的判断，" +
-        "不要因为盘中几个点的波动反复改口。用中文回答，且只输出一个 JSON 对象。"
+    private val SYSTEM = "你是基金波段交易助手。你只依据用户给出的数据判断，" +
+        "不编造消息面，不给绝对化保证。用中文回答，只输出一个 JSON 对象。"
 
     private val BATCH_SYSTEM = "你是一名谨慎的波段交易助手，只依据给定数据分析，不编造消息面，" +
         "用中文回答，且只输出 JSON 数组。"
@@ -409,7 +388,7 @@ internal object AiPrompt {
     /** 价格相对 MA20 的档位。±1% 内算贴线，直接告诉模型「这是震荡区」。 */
     private fun bandText(percent: Double?): String = when {
         percent == null -> "无 MA20 可比"
-        abs(percent) <= QUIET_BAND_PCT -> String.format(Locale.US, "贴线，±%.0f%% 内属于震荡区", QUIET_BAND_PCT)
+        abs(percent) <= TREND_BAND_PCT -> String.format(Locale.US, "贴线，±%.1f%% 内属于震荡区", TREND_BAND_PCT)
         percent > 0 -> "在中轨上方"
         else -> "在中轨下方"
     }

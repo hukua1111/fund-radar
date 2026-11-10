@@ -144,13 +144,14 @@ class AiPromptTest {
         assertTrue(text.contains("【八、上一次的判断】"))
         assertTrue(text.contains("上一次（2026-11-10 10:12）给出：观望（置信度 62）"))
         assertTrue(text.contains("trend"))
-        assertTrue(text.contains("同一天内不要反复改口"))
+        // 1.15：同日改口交给 VerdictStabilizer 兜底，提示词里换成震荡档位可以买。
+        assertTrue(text.contains("trend=RANGE 时可以给 BUY"))
         // 不能漏出计算失败的痕迹。
         assertFalse(text.contains("NaN"))
         assertFalse(text.contains("null"))
     }
 
-    /** 这几条是 1.14.0 新增的数据驱动护栏，任何一条被删掉都该被拦下来。 */
+    /** 1.15 的数据驱动护栏：trend 阈值、震荡可买、去掉置信度硬封顶。 */
     @Test
     fun promptCarriesDataDrivenGuards() {
         val text = AiPrompt.judge(
@@ -170,9 +171,12 @@ class AiPromptTest {
         // MACD 要看三根柱，「未连续衰竭」才成立。
         assertTrue(text.contains("再前一根柱="))
         assertTrue(text.contains("最近两根柱有没有连续缩短"))
-        // 置信度三项上限。
-        assertTrue(text.contains("【四·补充】置信度上限"))
-        assertTrue(text.contains("confidence 必须 ≤ 60"))
+        // trend 阈值收到 0.5%，震荡档位允许启动买点。
+        assertTrue(text.contains("上方超过 0.5%"))
+        assertTrue(text.contains("trend=RANGE 时可以给 BUY"))
+        // 1.15 去掉了置信度三项硬封顶，只留事实。
+        assertTrue(text.contains("【四·补充】量能与相对强弱"))
+        assertFalse(text.contains("confidence 必须 ≤ 60"))
         // 结论有效期。
         assertTrue(text.contains("有效期 5 个交易日"))
     }
@@ -196,7 +200,9 @@ class AiPromptTest {
     }
 
     @Test
-    fun secondSwitchPromptIsStricter() {
+    fun secondSwitchIsReportedToModel() {
+        // 1.15 把「同日改口门槛」完全交给 VerdictStabilizer 执行（≥75 分且同向），
+        // 提示词只负责把今天改过几次告诉模型，不再重复立一条规则。
         val prompt = AiPrompt.judge(
             fundName = "光伏产业",
             code = "931151",
@@ -208,7 +214,6 @@ class AiPromptTest {
             now = at(2026, 11, 10, 14, 30)
         )
         assertTrue(prompt.user.contains("今天已经改过 2 次方向了"))
-        assertTrue(prompt.user.contains("置信度 ≥ 75 且 trend 与 action 同向"))
     }
 
     @Test

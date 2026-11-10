@@ -77,16 +77,26 @@ object VerdictStabilizer {
             return keep(previous, raw, today, switches)
         }
 
-        // 2. 自相矛盾：trend 说震荡，却要买卖。
-        val normalized = if (raw.trend == Trend.RANGE && raw.action != SwingAction.HOLD) {
-            raw.copy(
+        // 2. 震荡档位：BUY 放行（1.15 起的「启动买点」），SELL 改回观望。
+        //
+        //    1.14 是「RANGE 一律 HOLD」。消融实测：40 例里 5 例被判 RANGE 强制观望，
+        //    后续 20 日合计 +43%，全被这条吃掉。现在允许 RANGE+BUY，但置信度压到 55，
+        //    且提示词要求写清「买的是启动不是趋势」和触发条件（站上哪条均线、哪个指标
+        //    刚转向），写不出来模型自己会给 HOLD。
+        //    卖出不放行：震荡里的卖出多半是追跌，代价比错过一次启动更贵。
+        val normalized = when {
+            raw.trend == Trend.RANGE && raw.action == SwingAction.BUY -> raw.copy(
+                confidence = minOf(raw.confidence, 55),
+                intended = raw.action,
+                reason = "震荡档位下的启动买点（仓位宜轻）。" + raw.reason
+            )
+            raw.trend == Trend.RANGE && raw.action == SwingAction.SELL -> raw.copy(
                 action = SwingAction.HOLD,
                 intended = raw.action,
                 confidence = minOf(raw.confidence, 55),
-                reason = "趋势判定为震荡，不构成" + raw.action.label + "。" + raw.reason
+                reason = "趋势判定为震荡，不构成卖出。" + raw.reason
             )
-        } else {
-            raw
+            else -> raw
         }
 
         // 3. 动作没变：平滑置信度即可。
