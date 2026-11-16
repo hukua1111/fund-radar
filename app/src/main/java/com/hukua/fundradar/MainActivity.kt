@@ -29,8 +29,11 @@ import com.hukua.fundradar.ui.HoldingSheet
 import com.hukua.fundradar.ui.IndexViewModel
 import com.hukua.fundradar.ui.KlineViewModel
 import com.hukua.fundradar.ui.SettingsScreen
+import com.hukua.fundradar.ui.SignalScreen
+import com.hukua.fundradar.ui.SignalViewModel
 import com.hukua.fundradar.ui.TAB_LIMIT
 import com.hukua.fundradar.ui.TAB_PORTFOLIO
+import com.hukua.fundradar.ui.TAB_SIGNAL
 import com.hukua.fundradar.ui.TrackIndexSheet
 import com.hukua.fundradar.ui.theme.FundRadarTheme
 import com.hukua.fundradar.work.DailyScheduler
@@ -68,6 +71,7 @@ class MainActivity : ComponentActivity() {
                     factory = FundViewModel.factory(this, FundScope.LIMIT)
                 )
                 val indexViewModel: IndexViewModel = viewModel(factory = IndexViewModel.factory(this))
+                val signalViewModel: SignalViewModel = viewModel(factory = SignalViewModel.factory(this))
 
                 val portfolioDetail by portfolioViewModel.detail.collectAsStateWithLifecycle()
                 val limitDetail by limitViewModel.detail.collectAsStateWithLifecycle()
@@ -124,6 +128,12 @@ class MainActivity : ComponentActivity() {
                                 portfolioViewModel.refreshEstimates()
                                 delay(if (isTradingTime()) LIST_TICK_MS else LIST_IDLE_TICK_MS)
                             }
+                        }
+
+                        // 信号页只在进入时算一轮：指标只用已收盘日线，盘中不会变，
+                        // 不需要跟着行情轮询；手动刷新走页内按钮。
+                        TAB_SIGNAL -> lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                            signalViewModel.load()
                         }
                     }
                 }
@@ -267,6 +277,16 @@ class MainActivity : ComponentActivity() {
                             onOpenSettings = openSettings,
                             onOpenDetail = { fund ->
                                 limitViewModel.openDetail(fund)
+                                route = "fund"
+                            },
+                            bottomBar = bottomBar
+                        )
+
+                        TAB_SIGNAL -> SignalScreen(
+                            viewModel = signalViewModel,
+                            onOpenSettings = openSettings,
+                            onOpenDetail = { fund ->
+                                portfolioViewModel.openDetail(fund)
                                 route = "fund"
                             },
                             bottomBar = bottomBar
