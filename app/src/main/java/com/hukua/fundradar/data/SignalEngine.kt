@@ -96,7 +96,10 @@ object SignalEngine {
         val ma5 = movingAverage(closes, 5)
         val ma10 = movingAverage(closes, 10)
         val ma20 = movingAverage(closes, 20)
-        val hist = macd(closes).hist
+        val macdLine = macd(closes)
+        val hist = macdLine.hist
+        val dif = macdLine.dif
+        val dea = macdLine.dea
         val boll = bollingerBands(closes)
 
         val last = candles.size - 1
@@ -183,6 +186,53 @@ object SignalEngine {
             )
         }
 
+        // ---- 买入 4：MACD金叉（DIF 今日上穿 DEA，昨天还在下方） ----
+        val dLast = dif[last]
+        val eLast = dea[last]
+        val dPrev = dif[prev]
+        val ePrev = dea[prev]
+        if (dLast != null && eLast != null && dPrev != null && ePrev != null &&
+            dLast > eLast && dPrev <= ePrev
+        ) {
+            val zone = if (eLast < 0) {
+                "零轴下方金叉，属低位反转信号，左侧属性强，仓位宜轻"
+            } else {
+                "零轴上方金叉，属强势中继信号"
+            }
+            signals += TradeSignal(
+                SignalAction.BUY,
+                "MACD金叉",
+                "DIF（${priceText(dLast)}）今日上穿 DEA（${priceText(eLast)}），$zone。" +
+                    "失效：DIF 重新跌回 DEA 下方（死叉）。"
+            )
+        }
+
+        // ---- 买入 5：MACD底背离（价格新低但 DIF 低点抬高，今日金叉确认） ----
+        // 用绿柱段（hist<0 的连续区间）划分两段下跌：刚结束的绿柱段 vs 上一段。
+        if (h0 != null && h1 != null && h0 > 0 && h1 < 0) {
+            val greenRuns = signRuns(hist, last, negative = true)
+            val cur = greenRuns.lastOrNull()
+            val old = greenRuns.getOrNull(greenRuns.size - 2)
+            if (cur != null && old != null && cur.last() == prev) {
+                val priceLowCur = cur.minOf { closes[it] }
+                val priceLowOld = old.minOf { closes[it] }
+                val difLowCur = cur.mapNotNull { dif[it] }.minOrNull()
+                val difLowOld = old.mapNotNull { dif[it] }.minOrNull()
+                if (difLowCur != null && difLowOld != null &&
+                    priceLowCur < priceLowOld && difLowCur > difLowOld && difLowCur < 0
+                ) {
+                    signals += TradeSignal(
+                        SignalAction.BUY,
+                        "MACD底背离",
+                        "指数创新低（${priceText(priceLowOld)} → ${priceText(priceLowCur)}），" +
+                            "但 DIF 低点抬高（${priceText(difLowOld)} → ${priceText(difLowCur)}），" +
+                            "下跌动能背离，今日金叉确认。左侧反转信号，可能背离后再背离。" +
+                            "失效：收盘跌破前低 ${priceText(priceLowCur)}。"
+                    )
+                }
+            }
+        }
+
         // ---- 卖出 1：趋势破坏（今天首次齐备空头条件） ----
         if (downState(last) && !downState(prev)) {
             val flipped = ArrayList<String>()
@@ -246,8 +296,71 @@ object SignalEngine {
             }
         }
 
+        // ---- 卖出 4：MACD死叉（DIF 今日下穿 DEA，昨天还在上方） ----
+        if (dLast != null && eLast != null && dPrev != null && ePrev != null &&
+            dLast < eLast && dPrev >= ePrev
+        ) {
+            val zone = if (eLast > 0) {
+                "零轴上方死叉，高位动能转弱，回落风险加大"
+            } else {
+                "零轴下方死叉，弱势延续"
+            }
+            signals += TradeSignal(
+                SignalAction.SELL,
+                "MACD死叉",
+                "DIF（${priceText(dLast)}）今日下穿 DEA（${priceText(eLast)}），$zone。" +
+                    "失效：DIF 重新站上 DEA（金叉）。"
+            )
+        }
+
+        // ---- 卖出 5：MACD顶背离（价格新高但 DIF 高点降低，今日死叉确认） ----
+        if (h0 != null && h1 != null && h0 < 0 && h1 > 0) {
+            val redRuns = signRuns(hist, last, negative = false)
+            val cur = redRuns.lastOrNull()
+            val old = redRuns.getOrNull(redRuns.size - 2)
+            if (cur != null && old != null && cur.last() == prev) {
+                val priceHighCur = cur.maxOf { closes[it] }
+                val priceHighOld = old.maxOf { closes[it] }
+                val difHighCur = cur.mapNotNull { dif[it] }.maxOrNull()
+                val difHighOld = old.mapNotNull { dif[it] }.maxOrNull()
+                if (difHighCur != null && difHighOld != null &&
+                    priceHighCur > priceHighOld && difHighCur < difHighOld && difHighCur > 0
+                ) {
+                    signals += TradeSignal(
+                        SignalAction.SELL,
+                        "MACD顶背离",
+                        "指数创新高（${priceText(priceHighOld)} → ${priceText(priceHighCur)}），" +
+                            "但 DIF 高点降低（${priceText(difHighOld)} → ${priceText(difHighCur)}），" +
+                            "上涨动能背离，今日死叉确认。强势趋势中可能只是中继整理。" +
+                            "失效：收盘突破前高 ${priceText(priceHighCur)}。"
+                    )
+                }
+            }
+        }
+
         val summary = "收盘 ${priceText(latest.close)} · 相对MA20 ${pctText(vsMa20)} · ${trend.label}"
         return SignalReport(trend, latest.date, signals, summary)
+    }
+
+    /**
+     * 把 MACD 柱按符号切成连续区间（只统计 [upTo] 及之前、值非空的柱子）。
+     * 底背离/顶背离用「上一段 vs 刚结束的一段」比较价格与 DIF 的极值。
+     */
+    private fun signRuns(hist: List<Double?>, upTo: Int, negative: Boolean): List<List<Int>> {
+        val runs = ArrayList<List<Int>>()
+        var current = ArrayList<Int>()
+        for (i in 0..upTo) {
+            val h = hist[i]
+            val match = h != null && h != 0.0 && (if (negative) h < 0 else h > 0)
+            if (match) {
+                current += i
+            } else if (current.isNotEmpty()) {
+                runs += current
+                current = ArrayList()
+            }
+        }
+        if (current.isNotEmpty()) runs += current
+        return runs
     }
 
     private fun pctText(value: Double?): String =

@@ -148,6 +148,72 @@ class SignalEngineTest {
     }
 
     @Test
+    fun macdGoldenCrossFiresOnceOnCrossDay() {
+        // 趋势启动夹具的前 70 根：金叉恰好发生在最后一根（93.2）。
+        val closes = (List(50) { 100.0 } +
+            (1..15).map { 100.0 - it * 0.6 } +
+            listOf(91.2, 91.6, 92.0, 92.6, 93.2, 93.9, 94.7)).take(70)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "MACD金叉" }
+        assertTrue("应触发MACD金叉，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.BUY, signal!!.action)
+        assertTrue(signal.reason.contains("零轴下方"))
+        // 再涨一天：DIF 仍在 DEA 上方，不是新交叉，不再重复报。
+        val next = SignalEngine.evaluate(series(closes + listOf(93.9)), now = afterAllBars())
+        assertTrue(next.signals.none { it.title == "MACD金叉" })
+    }
+
+    @Test
+    fun macdDeathCrossFiresOnceOnCrossDay() {
+        // 趋势破坏夹具的前 70 根：死叉恰好发生在最后一根（106.8）。
+        val closes = (List(50) { 100.0 } +
+            (1..15).map { 100.0 + it * 0.6 } +
+            listOf(108.8, 108.4, 108.0, 107.4, 106.8, 106.1, 105.3)).take(70)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "MACD死叉" }
+        assertTrue("应触发MACD死叉，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.SELL, signal!!.action)
+        assertTrue(signal.reason.contains("零轴上方"))
+        val next = SignalEngine.evaluate(series(closes + listOf(106.1)), now = afterAllBars())
+        assertTrue(next.signals.none { it.title == "MACD死叉" })
+    }
+
+    @Test
+    fun macdBottomDivergenceFiresOnConfirmingCross() {
+        // 快跌到 92 → 反弹 → 慢跌到更低的 89.6（DIF 低点抬高）→ 急涨，第 89 根金叉确认。
+        val closes = List(60) { 100.0 } +
+            (1..8).map { 100.0 - it * 1.0 } +
+            (1..6).map { 92.0 + it * 0.8 } +
+            (1..12).map { 96.8 - it * 0.6 } +
+            listOf(91.1, 92.6, 94.1)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "MACD底背离" }
+        assertTrue("应触发MACD底背离，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.BUY, signal!!.action)
+        assertTrue(signal.reason.contains("失效"))
+        // 确认日之后再涨一天：事件已发生，不再重复报。
+        val next = SignalEngine.evaluate(series(closes + listOf(95.6)), now = afterAllBars())
+        assertTrue(next.signals.none { it.title == "MACD底背离" })
+    }
+
+    @Test
+    fun macdTopDivergenceFiresOnConfirmingCross() {
+        // 快涨到 108 → 回落 → 慢涨到更高的 110.4（DIF 高点降低）→ 急跌，第 89 根死叉确认。
+        val closes = List(60) { 100.0 } +
+            (1..8).map { 100.0 + it * 1.0 } +
+            (1..6).map { 108.0 - it * 0.8 } +
+            (1..12).map { 103.2 + it * 0.6 } +
+            listOf(108.9, 107.4, 105.9)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "MACD顶背离" }
+        assertTrue("应触发MACD顶背离，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.SELL, signal!!.action)
+        assertTrue(signal.reason.contains("失效"))
+        val next = SignalEngine.evaluate(series(closes + listOf(104.4)), now = afterAllBars())
+        assertTrue(next.signals.none { it.title == "MACD顶背离" })
+    }
+
+    @Test
     fun openBarIsExcludedFromSignals() {
         val flat = List(80) { 100.0 }
         val now = Calendar.getInstance().apply {
