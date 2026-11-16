@@ -71,6 +71,24 @@ object SignalEngine {
     const val DRAWDOWN_PCT = 10.0
     const val DRAWDOWN_WINDOW = 60
 
+    /** 放量突破 / 支撑跌破回看的收盘价窗口（不含当日）。 */
+    const val BREAKOUT_WINDOW = 60
+
+    /** 放量突破需要的量比门槛。 */
+    const val BREAKOUT_VOLUME_RATIO = 1.5
+
+    /** RSI(14) 超卖 / 超买分界。 */
+    const val RSI_OVERSOLD = 30.0
+    const val RSI_OVERBOUGHT = 70.0
+
+    /** KDJ 金叉只认 D 低于此值的低位区，死叉只认 D 高于此值的高位区。 */
+    const val KDJ_LOW = 25.0
+    const val KDJ_HIGH = 75.0
+
+    /** 吞没形态要求的位置：收盘相对 MA20 的偏离百分比。 */
+    const val ENGULF_LOW_PCT = -3.0
+    const val ENGULF_HIGH_PCT = 5.0
+
     /** MACD 柱从第 34 根起才有效，再留几根余量。 */
     private const val MIN_BARS = 35
 
@@ -101,6 +119,8 @@ object SignalEngine {
         val dif = macdLine.dif
         val dea = macdLine.dea
         val boll = bollingerBands(closes)
+        val rsi14 = rsi(closes)
+        val kdjLine = kdj(candles)
 
         val last = candles.size - 1
         val prev = last - 1
@@ -233,6 +253,75 @@ object SignalEngine {
             }
         }
 
+        // ---- 买入 6：放量突破（收盘创近60日收盘新高 + 量比确认，昨天还没突破） ----
+        val priorHigh = closes.subList(maxOf(0, last - BREAKOUT_WINDOW), last).maxOrNull()
+        val priorLow = closes.subList(maxOf(0, last - BREAKOUT_WINDOW), last).minOrNull()
+        val prevPriorHigh = closes.subList(maxOf(0, prev - BREAKOUT_WINDOW), prev).maxOrNull()
+        val prevPriorLow = closes.subList(maxOf(0, prev - BREAKOUT_WINDOW), prev).minOrNull()
+        val lastRatio = series.volumeRatio()
+        if (priorHigh != null && latest.close > priorHigh &&
+            (prevPriorHigh == null || candles[prev].close <= prevPriorHigh) &&
+            lastRatio != null && lastRatio >= BREAKOUT_VOLUME_RATIO
+        ) {
+            signals += TradeSignal(
+                SignalAction.BUY,
+                "放量突破",
+                "收盘 ${priceText(latest.close)} 创近${BREAKOUT_WINDOW}日收盘新高" +
+                    "（前高 ${priceText(priorHigh)}），量比 " +
+                    String.format(java.util.Locale.US, "%.2f", lastRatio) +
+                    "（≥$BREAKOUT_VOLUME_RATIO）确认，有量配合的突破。" +
+                    "失效：收盘跌回 ${priceText(priorHigh)} 下方（假突破）。"
+            )
+        }
+
+        // ---- 买入 7：RSI超卖修复（RSI14 今日收回 30 上方，昨天还在超卖区） ----
+        val rsiLast = rsi14[last]
+        val rsiPrev = rsi14[prev]
+        if (rsiLast != null && rsiPrev != null &&
+            rsiLast > RSI_OVERSOLD && rsiPrev <= RSI_OVERSOLD
+        ) {
+            signals += TradeSignal(
+                SignalAction.BUY,
+                "RSI超卖修复",
+                "RSI(14) 从超卖区回升至 ${oscText(rsiLast)}（昨日 ${oscText(rsiPrev)} ≤${RSI_OVERSOLD.toInt()}），" +
+                    "抛压衰竭。左侧信号，超卖可以更深。失效：RSI 重新跌回 ${RSI_OVERSOLD.toInt()} 下方。"
+            )
+        }
+
+        // ---- 买入 8：KDJ低位金叉（K 上穿 D 且 D 在低位区） ----
+        val kLast = kdjLine.k[last]
+        val dKLast = kdjLine.d[last]
+        val kPrev = kdjLine.k[prev]
+        val dKPrev = kdjLine.d[prev]
+        if (kLast != null && dKLast != null && kPrev != null && dKPrev != null &&
+            kLast > dKLast && kPrev <= dKPrev && dKLast < KDJ_LOW
+        ) {
+            signals += TradeSignal(
+                SignalAction.BUY,
+                "KDJ低位金叉",
+                "K（${oscText(kLast)}）今日上穿 D（${oscText(dKLast)}），D 低于 ${KDJ_LOW.toInt()} 的低位区，" +
+                    "短线超卖后的转折尝试。KDJ 灵敏、假信号多，宜与趋势类信号互相印证。" +
+                    "失效：K 重新跌回 D 下方。"
+            )
+        }
+
+        // ---- 买入 9：低位看涨吞没（偏离MA20达-3%以下，今日阳线实体吞没昨日阴线） ----
+        val prevCandle = candles[prev]
+        if (vsMa20 != null && vsMa20 <= ENGULF_LOW_PCT &&
+            prevCandle.close < prevCandle.open &&
+            latest.close > latest.open &&
+            latest.close >= prevCandle.open && latest.open <= prevCandle.close
+        ) {
+            signals += TradeSignal(
+                SignalAction.BUY,
+                "低位看涨吞没",
+                "收盘相对MA20 ${pctText(vsMa20)} 的低位，今日阳线（${priceText(latest.open)} → " +
+                    "${priceText(latest.close)}）吞没昨日阴线（${priceText(prevCandle.open)} → " +
+                    "${priceText(prevCandle.close)}），买方单日反扑。" +
+                    "失效：收盘跌破今日开盘 ${priceText(latest.open)}。"
+            )
+        }
+
         // ---- 卖出 1：趋势破坏（今天首次齐备空头条件） ----
         if (downState(last) && !downState(prev)) {
             val flipped = ArrayList<String>()
@@ -338,6 +427,61 @@ object SignalEngine {
             }
         }
 
+        // ---- 卖出 6：支撑跌破（收盘创近60日收盘新低，昨天还没跌破） ----
+        if (priorLow != null && latest.close < priorLow &&
+            (prevPriorLow == null || candles[prev].close >= prevPriorLow)
+        ) {
+            signals += TradeSignal(
+                SignalAction.SELL,
+                "支撑跌破",
+                "收盘 ${priceText(latest.close)} 跌破近${BREAKOUT_WINDOW}日收盘低点" +
+                    "（${priceText(priorLow)}），支撑失效，下方缺少近期筹码参照。" +
+                    "失效：收盘重新站上 ${priceText(priorLow)}。"
+            )
+        }
+
+        // ---- 卖出 7：RSI超买回落（RSI14 今日跌回 70 下方，昨天还在超买区） ----
+        if (rsiLast != null && rsiPrev != null &&
+            rsiLast < RSI_OVERBOUGHT && rsiPrev >= RSI_OVERBOUGHT
+        ) {
+            signals += TradeSignal(
+                SignalAction.SELL,
+                "RSI超买回落",
+                "RSI(14) 从超买区回落至 ${oscText(rsiLast)}（昨日 ${oscText(rsiPrev)} ≥${RSI_OVERBOUGHT.toInt()}），" +
+                    "上冲动能降温。强势趋势中 RSI 可长期钝化，未必立刻下跌。" +
+                    "失效：RSI 重新站上 ${RSI_OVERBOUGHT.toInt()}。"
+            )
+        }
+
+        // ---- 卖出 8：KDJ高位死叉（K 下穿 D 且 D 在高位区） ----
+        if (kLast != null && dKLast != null && kPrev != null && dKPrev != null &&
+            kLast < dKLast && kPrev >= dKPrev && dKLast > KDJ_HIGH
+        ) {
+            signals += TradeSignal(
+                SignalAction.SELL,
+                "KDJ高位死叉",
+                "K（${oscText(kLast)}）今日下穿 D（${oscText(dKLast)}），D 高于 ${KDJ_HIGH.toInt()} 的高位区，" +
+                    "短线过热后的回落尝试。KDJ 灵敏、假信号多，宜与趋势类信号互相印证。" +
+                    "失效：K 重新站上 D。"
+            )
+        }
+
+        // ---- 卖出 9：高位看跌吞没（偏离MA20达+5%以上，今日阴线实体吞没昨日阳线） ----
+        if (vsMa20 != null && vsMa20 >= ENGULF_HIGH_PCT &&
+            prevCandle.close > prevCandle.open &&
+            latest.close < latest.open &&
+            latest.open >= prevCandle.close && latest.close <= prevCandle.open
+        ) {
+            signals += TradeSignal(
+                SignalAction.SELL,
+                "高位看跌吞没",
+                "收盘相对MA20 ${pctText(vsMa20)} 的高位，今日阴线（${priceText(latest.open)} → " +
+                    "${priceText(latest.close)}）吞没昨日阳线（${priceText(prevCandle.open)} → " +
+                    "${priceText(prevCandle.close)}），卖方单日反扑。" +
+                    "失效：收盘突破今日开盘 ${priceText(latest.open)}。"
+            )
+        }
+
         val summary = "收盘 ${priceText(latest.close)} · 相对MA20 ${pctText(vsMa20)} · ${trend.label}"
         return SignalReport(trend, latest.date, signals, summary)
     }
@@ -365,4 +509,8 @@ object SignalEngine {
 
     private fun pctText(value: Double?): String =
         value?.let { String.format(java.util.Locale.US, "%+.2f%%", it) } ?: "无"
+
+    /** 摆动指标（RSI / K / D）数值文本。 */
+    private fun oscText(value: Double): String =
+        String.format(java.util.Locale.US, "%.1f", value)
 }

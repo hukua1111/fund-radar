@@ -214,6 +214,119 @@ class SignalEngineTest {
     }
 
     @Test
+    fun volumeBreakoutFiresOnceWithVolumeConfirmation() {
+        val closes = List(70) { 100.0 } + listOf(101.0)
+        val volumes = List(70) { 1000.0 } + listOf(2000.0)
+        val report = SignalEngine.evaluate(series(closes, volumes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "放量突破" }
+        assertTrue("应触发放量突破，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.BUY, signal!!.action)
+        // 次日缩量再创新高：昨天已突破，不是新事件；量比也不够。
+        val next = SignalEngine.evaluate(
+            series(closes + listOf(102.0), volumes + listOf(1000.0)),
+            now = afterAllBars()
+        )
+        assertTrue(next.signals.none { it.title == "放量突破" })
+        // 同样的突破但无量：不报。
+        val quiet = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        assertTrue(quiet.signals.none { it.title == "放量突破" })
+    }
+
+    @Test
+    fun supportBreakdownFiresOnceOnFirstNewLow() {
+        val closes = List(70) { 100.0 } + listOf(99.0)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "支撑跌破" }
+        assertTrue("应触发支撑跌破，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.SELL, signal!!.action)
+        // 再跌一天：昨天已经破位，不是首次，不再重复报。
+        val next = SignalEngine.evaluate(series(closes + listOf(98.0)), now = afterAllBars())
+        assertTrue(next.signals.none { it.title == "支撑跌破" })
+    }
+
+    @Test
+    fun rsiOversoldRepairFiresOnReclaiming30() {
+        // 阴跌 15 根把 RSI 打进超卖区，回升第 3 根恰好收回 30 上方。
+        val closes = (List(60) { 100.0 } +
+            (1..15).map { 100.0 - it * 1.0 } +
+            (1..8).map { 85.0 + it * 1.5 }).take(78)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "RSI超卖修复" }
+        assertTrue("应触发RSI超卖修复，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.BUY, signal!!.action)
+        val next = SignalEngine.evaluate(series(closes + listOf(91.0)), now = afterAllBars())
+        assertTrue(next.signals.none { it.title == "RSI超卖修复" })
+    }
+
+    @Test
+    fun rsiOverboughtPullbackFiresOnLosing70() {
+        val closes = (List(60) { 100.0 } +
+            (1..15).map { 100.0 + it * 1.0 } +
+            (1..8).map { 115.0 - it * 1.5 }).take(78)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "RSI超买回落" }
+        assertTrue("应触发RSI超买回落，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.SELL, signal!!.action)
+        val next = SignalEngine.evaluate(series(closes + listOf(109.0)), now = afterAllBars())
+        assertTrue(next.signals.none { it.title == "RSI超买回落" })
+    }
+
+    @Test
+    fun kdjLowGoldenCrossFiresOnlyInLowZone() {
+        // 阴跌 15 根后第一根回升：K 上穿 D，D 还在 25 以下的低位区。
+        val closes = (List(60) { 100.0 } +
+            (1..15).map { 100.0 - it * 1.0 } +
+            (1..8).map { 85.0 + it * 1.5 }).take(76)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "KDJ低位金叉" }
+        assertTrue("应触发KDJ低位金叉，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.BUY, signal!!.action)
+        val next = SignalEngine.evaluate(series(closes + listOf(88.0)), now = afterAllBars())
+        assertTrue(next.signals.none { it.title == "KDJ低位金叉" })
+    }
+
+    @Test
+    fun kdjHighDeathCrossFiresOnlyInHighZone() {
+        val closes = (List(60) { 100.0 } +
+            (1..15).map { 100.0 + it * 1.0 } +
+            (1..8).map { 115.0 - it * 1.5 }).take(76)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "KDJ高位死叉" }
+        assertTrue("应触发KDJ高位死叉，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.SELL, signal!!.action)
+        val next = SignalEngine.evaluate(series(closes + listOf(112.0)), now = afterAllBars())
+        assertTrue(next.signals.none { it.title == "KDJ高位死叉" })
+    }
+
+    @Test
+    fun bullishEngulfingNeedsLowPosition() {
+        // 跌到相对MA20约-5%后，阳线 90→92 吞没昨日阴线 91→90。
+        val closes = List(60) { 100.0 } + (1..10).map { 100.0 - it * 1.0 } + listOf(92.0)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "低位看涨吞没" }
+        assertTrue("应触发低位看涨吞没，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.BUY, signal!!.action)
+        // 同样形态但位置不低（相对MA20高于-3%）：不报。
+        val shallow = List(60) { 100.0 } + listOf(99.0, 98.5, 98.0, 99.5)
+        val shallowReport = SignalEngine.evaluate(series(shallow), now = afterAllBars())
+        assertTrue(shallowReport.signals.none { it.title == "低位看涨吞没" })
+    }
+
+    @Test
+    fun bearishEngulfingNeedsHighPosition() {
+        // 涨到相对MA20约+7%后，阴线 115→112.5 吞没昨日阳线 113.5→115。
+        val closes = List(60) { 100.0 } + (1..10).map { 100.0 + it * 1.5 } + listOf(112.5)
+        val report = SignalEngine.evaluate(series(closes), now = afterAllBars())
+        val signal = report.signals.firstOrNull { it.title == "高位看跌吞没" }
+        assertTrue("应触发高位看跌吞没，实际：${report.signals.map { it.title }}", signal != null)
+        assertEquals(SignalAction.SELL, signal!!.action)
+        // 同样形态但位置不高（相对MA20低于+5%）：不报。
+        val shallow = List(60) { 100.0 } + listOf(101.0, 101.5, 102.0, 100.5)
+        val shallowReport = SignalEngine.evaluate(series(shallow), now = afterAllBars())
+        assertTrue(shallowReport.signals.none { it.title == "高位看跌吞没" })
+    }
+
+    @Test
     fun openBarIsExcludedFromSignals() {
         val flat = List(80) { 100.0 }
         val now = Calendar.getInstance().apply {

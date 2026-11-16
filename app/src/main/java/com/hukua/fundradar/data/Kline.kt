@@ -267,6 +267,76 @@ private fun exponentialMovingAverage(values: List<Double>, period: Int): List<Do
     return result
 }
 
+/**
+ * RSI（Wilder 平滑，默认 14）：首值取前 [period] 根涨跌幅的简单均值，
+ * 之后按 (前值 × (period−1) + 当日) / period 递推。前 [period] 根历史不足补 null。
+ * 全程无跌（avgLoss=0）时记 100，无涨时记 0，避免除零。
+ */
+fun rsi(values: List<Double>, period: Int = 14): List<Double?> {
+    if (period <= 0 || values.size <= period) return values.map { null }
+    val result = ArrayList<Double?>(values.size)
+    var avgGain = 0.0
+    var avgLoss = 0.0
+    for (i in 1..period) {
+        val change = values[i] - values[i - 1]
+        if (change > 0) avgGain += change else avgLoss -= change
+    }
+    avgGain /= period
+    avgLoss /= period
+    repeat(period) { result += null }
+    result += rsiValue(avgGain, avgLoss)
+    for (i in period + 1 until values.size) {
+        val change = values[i] - values[i - 1]
+        val gain = if (change > 0) change else 0.0
+        val loss = if (change < 0) -change else 0.0
+        avgGain = (avgGain * (period - 1) + gain) / period
+        avgLoss = (avgLoss * (period - 1) + loss) / period
+        result += rsiValue(avgGain, avgLoss)
+    }
+    return result
+}
+
+private fun rsiValue(avgGain: Double, avgLoss: Double): Double = when {
+    avgLoss <= 0.0 -> 100.0
+    avgGain <= 0.0 -> 0.0
+    else -> 100.0 - 100.0 / (1.0 + avgGain / avgLoss)
+}
+
+/** KDJ 三条线，与 K 线逐根对齐；历史不足 [n] 根前补 null。 */
+data class Kdj(
+    val n: Int = 9,
+    val k: List<Double?> = emptyList(),
+    val d: List<Double?> = emptyList(),
+    val j: List<Double?> = emptyList()
+)
+
+/**
+ * KDJ（默认 9,3,3）：RSV = (收盘 − 近n日最低) / (近n日最高 − 近n日最低) × 100，
+ * K、D 用 1/3 权重的递推平滑（种子 50），J = 3K − 2D。区间内高低点相同时 RSV 记 50。
+ */
+fun kdj(candles: List<Candle>, n: Int = 9): Kdj {
+    if (n <= 0 || candles.size < n) return Kdj(n, candles.map { null }, candles.map { null }, candles.map { null })
+    val ks = ArrayList<Double?>(candles.size)
+    val ds = ArrayList<Double?>(candles.size)
+    val js = ArrayList<Double?>(candles.size)
+    var k = 50.0
+    var d = 50.0
+    candles.forEachIndexed { index, candle ->
+        if (index < n - 1) {
+            ks += null; ds += null; js += null
+            return@forEachIndexed
+        }
+        val window = candles.subList(index - n + 1, index + 1)
+        val low = window.minOf { it.low }
+        val high = window.maxOf { it.high }
+        val rsv = if (high > low) (candle.close - low) / (high - low) * 100 else 50.0
+        k = (2.0 * k + rsv) / 3.0
+        d = (2.0 * d + k) / 3.0
+        ks += k; ds += d; js += 3 * k - 2 * d
+    }
+    return Kdj(n, ks, ds, js)
+}
+
 /** 本地日期 `yyyy-MM-dd`，与上游返回的日期格式一致。 */
 fun todayText(calendar: Calendar = Calendar.getInstance()): String =
     SimpleDateFormat("yyyy-MM-dd", Locale.US).format(calendar.time)
