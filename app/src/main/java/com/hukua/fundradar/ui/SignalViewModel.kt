@@ -55,13 +55,17 @@ data class SignalUiState(
 
     val buyCount: Int get() = rows.count { it.report?.hasBuy == true }
     val sellCount: Int get() = rows.count { it.held && it.report?.hasSell == true }
+
+    /** 任一报告的基准 bar 是盘中实时 bar：整页按「盘中实时」提示。 */
+    val live: Boolean get() = rows.any { it.report?.live == true }
 }
 
 /**
- * 「信号」页：持仓清单里每只基金 → 跟踪指数 → 已收盘日线 → 本地规则信号。
+ * 「信号」页：持仓清单里每只基金 → 跟踪指数 → 日线（含盘中实时 bar）→ 本地规则信号。
  *
  * 与 AI 判断完全独立：不读 AI 配置、不发模型请求，[SignalEngine] 纯本地计算。
- * K 线走 [KlineRepository] 的缓存 + 增量链路，多只基金跟踪同一指数时只算一次。
+ * K 线走 [KlineRepository] 的缓存 + 增量链路（盘中 2 分钟 TTL），
+ * 多只基金跟踪同一指数时只算一次。
  */
 class SignalViewModel(context: Context) : ViewModel() {
 
@@ -108,10 +112,10 @@ class SignalViewModel(context: Context) : ViewModel() {
                 item.fundCodes.forEach { code -> byFund.putIfAbsent(code, item) }
             }
 
-            // 沪深300 近 20 日涨跌：强势回踩信号的相对强弱基准。
+            // 沪深300 近 20 日涨跌：强势回踩信号的相对强弱基准（含盘中实时 bar）。
             val benchmark20 = withTimeoutOrNull(8_000) {
                 runCatching {
-                    klineRepository.load(BENCHMARK_SECID).series?.completed()?.changeOver(20)
+                    klineRepository.load(BENCHMARK_SECID).series?.changeOver(20)
                 }.getOrNull()
             }
 
@@ -174,7 +178,7 @@ class SignalViewModel(context: Context) : ViewModel() {
     }
 
     private fun evaluate(series: KlineSeries, benchmark20: Double?): SignalReport {
-        val self20 = series.completed().changeOver(20)
+        val self20 = series.changeOver(20)
         val relative20 = if (self20 != null && benchmark20 != null) self20 - benchmark20 else null
         return SignalEngine.evaluate(series, relative20)
     }

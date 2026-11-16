@@ -327,21 +327,67 @@ class SignalEngineTest {
     }
 
     @Test
-    fun openBarIsExcludedFromSignals() {
+    fun openBarIsIncludedAsLiveSignal() {
         val flat = List(80) { 100.0 }
         val now = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 10)
             set(Calendar.MINUTE, 0)
         }
-        // 盘中最后一根暴涨 20%：未定型，不能据此报信号。
+        // 盘中最后一根暴涨 20%：实时口径下立即参与计算，标记 live。
         val withOpenBar = series(flat + listOf(120.0))
         val patched = withOpenBar.copy(
             candles = withOpenBar.candles.dropLast(1) +
                 withOpenBar.candles.last().copy(date = todayText(now))
         )
         val report = SignalEngine.evaluate(patched, now = now)
-        assertEquals(SignalTrend.RANGE, report.trend)
-        assertTrue(report.signals.isEmpty())
+        assertTrue(report.live)
+        assertEquals(todayText(now), report.asOf)
+        assertEquals(SignalTrend.UP, report.trend)
+        assertTrue(report.signals.isNotEmpty())
+        assertTrue(report.summary.contains("现价"))
+        // 15:00 之后同一根视为收盘定型：live 关闭，措辞回到「收盘」。
+        val closed = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 15)
+            set(Calendar.MINUTE, 30)
+        }
+        val closedReport = SignalEngine.evaluate(patched, now = closed)
+        assertTrue(!closedReport.live)
+        assertTrue(closedReport.summary.contains("收盘"))
+    }
+
+    @Test
+    fun liveVolumeRatioScalesByElapsedTradingTime() {
+        // 10:00 已交易 30 分钟，成交 300 手 → 折算全天 (300/30)/(1000/240)=2.4 ≥1.5，
+        // 突破上午就能报，不用等收盘放量。
+        val closes = List(70) { 100.0 } + listOf(101.0)
+        val volumes = List(70) { 1000.0 } + listOf(300.0)
+        val now = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 10)
+            set(Calendar.MINUTE, 0)
+        }
+        val raw = series(closes, volumes)
+        val patched = raw.copy(
+            candles = raw.candles.dropLast(1) +
+                raw.candles.last().copy(date = todayText(now))
+        )
+        val live = SignalEngine.evaluate(patched, now = now)
+        assertTrue(
+            "盘中折算量比应触发放量突破，实际：${live.signals.map { it.title }}",
+            live.signals.any { it.title == "放量突破" }
+        )
+        // 收盘后同一根：量比按全天算只有 0.3，不报突破。
+        val closed = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 15)
+            set(Calendar.MINUTE, 30)
+        }
+        val closedReport = SignalEngine.evaluate(patched, now = closed)
+        assertTrue(closedReport.signals.none { it.title == "放量突破" })
+    }
+
+    @Test
+    fun closedSeriesReportsNotLive() {
+        val report = SignalEngine.evaluate(series(List(80) { 100.0 }), now = afterAllBars())
+        assertTrue(!report.live)
     }
 
     @Test

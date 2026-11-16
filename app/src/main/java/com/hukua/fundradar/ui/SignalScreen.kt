@@ -57,8 +57,9 @@ import java.util.Locale
 /**
  * 「信号」页：持有基金的买入 / 卖出信号 + 未持有基金的买入信号。
  *
- * 全部来自跟踪指数的已收盘日线、由 [com.hukua.fundradar.data.SignalEngine]
- * 本地计算，与 AI 判断互不依赖。页面只摆信号和依据，买不买由用户决定。
+ * 全部来自跟踪指数的日线（盘中含实时 bar）、由 [com.hukua.fundradar.data.SignalEngine]
+ * 本地计算，与 AI 判断互不依赖。盘中信号收盘前可能变化，页面有明确提示；
+ * 页面只摆信号和依据，买不买由用户决定。
  */
 @Composable
 fun SignalScreen(
@@ -112,7 +113,7 @@ fun SignalContent(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "按跟踪指数 · 已收盘日线 · 本地计算",
+                            text = "按跟踪指数 · 盘中实时 / 收盘定型 · 本地计算",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -198,8 +199,8 @@ fun SignalContent(
 
                     item(key = "footer") {
                         Text(
-                            text = "信号由跟踪指数的已收盘日线本地计算，与 AI 判断相互独立；" +
-                                "不含费率、赎回期与申赎时点，仅供参考，不构成投资建议",
+                            text = "信号由跟踪指数的日线本地计算（盘中含实时行情，收盘前可能变化），" +
+                                "与 AI 判断相互独立；不含费率、赎回期与申赎时点，仅供参考，不构成投资建议",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -244,9 +245,12 @@ private fun SignalSummaryCard(state: SignalUiState) {
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "更新于 " + timeText(state.updatedAt) + " · 指标只用已收盘定型的日线，盘中不抖动",
+                text = "更新于 " + timeText(state.updatedAt) +
+                    if (state.live) " · 盘中实时计算，收盘前信号可能变化或消失"
+                    else " · 已收盘定型，信号当天不再变化",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (state.live) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -346,7 +350,8 @@ private fun SignalCard(row: SignalRow, onClick: () -> Unit) {
                     }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "基准日 ${report.asOf} · ${report.summary}",
+                        text = "基准日 ${report.asOf}" + (if (report.live) "（盘中实时）" else "") +
+                            " · ${report.summary}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                     )
@@ -363,7 +368,7 @@ private fun SignalCard(row: SignalRow, onClick: () -> Unit) {
                     if (report.asOf.isNotBlank()) {
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "基准日 ${report.asOf}",
+                            text = "基准日 ${report.asOf}" + (if (report.live) "（盘中实时）" else ""),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                         )

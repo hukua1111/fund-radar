@@ -50,6 +50,12 @@ private const val DETAIL_TICK_MS = 3_000L
 
 private const val DETAIL_IDLE_TICK_MS = 30_000L
 
+/** 信号页交易时段重算间隔：K 线缓存盘中 2 分钟 TTL，1 分钟一轮足够跟上。 */
+private const val SIGNAL_TICK_MS = 60_000L
+
+/** 非交易时段信号页重算间隔，只为发现「又开盘了 / 收盘定型了」。 */
+private const val SIGNAL_IDLE_TICK_MS = 5 * 60_000L
+
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -130,10 +136,14 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // 信号页只在进入时算一轮：指标只用已收盘日线，盘中不会变，
-                        // 不需要跟着行情轮询；手动刷新走页内按钮。
+                        // 信号页实时口径：盘中含当日实时 bar，交易时段每分钟重算
+                        // （K 线缓存 2 分钟 TTL，实际网络请求约两分钟一次）；
+                        // 非交易时段降频，只为发现开盘 / 收盘定型。手动刷新走页内按钮。
                         TAB_SIGNAL -> lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                            signalViewModel.load()
+                            while (true) {
+                                signalViewModel.load()
+                                delay(if (isTradingTime()) SIGNAL_TICK_MS else SIGNAL_IDLE_TICK_MS)
+                            }
                         }
                     }
                 }

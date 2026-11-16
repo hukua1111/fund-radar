@@ -32,24 +32,27 @@ enum class SignalTrend(val label: String) {
 /** 一只基金对应跟踪指数的一份信号报告。 */
 data class SignalReport(
     val trend: SignalTrend,
-    /** 指标基准日：最后一根已收盘定型的日线。 */
+    /** 指标基准日：最后一根日线；盘中就是今天（未收盘）。 */
     val asOf: String,
     val signals: List<TradeSignal> = emptyList(),
     /** 一句话现状：收盘、相对 MA20、趋势档位。 */
     val summary: String = "",
     /** 数据不足 / 加载失败时的说明。 */
-    val note: String = ""
+    val note: String = "",
+    /** 最后一根是盘中未收盘的实时 bar：信号收盘前可能变化或消失。 */
+    val live: Boolean = false
 ) {
     val hasBuy: Boolean get() = signals.any { it.action == SignalAction.BUY }
     val hasSell: Boolean get() = signals.any { it.action == SignalAction.SELL }
 }
 
 /**
- * 本地规则信号引擎：只吃跟踪指数的**已收盘日线**，不调 AI、不联网。
+ * 本地规则信号引擎：只吃跟踪指数的日线，不调 AI、不联网。
  *
- * 与 [AiPrompt] 的关系：两者共用同一套指标（MA / MACD / BOLL / 量比）与
- * 趋势档位口径，但互不依赖 —— AI 判断要配置接口才能用，这里保证没配 AI
- * 也有信号可看；AI 结论与本地信号不一致时两边都摆出来，由用户自己决定。
+ * **实时口径**：盘中未收盘那根也参与计算（[SignalReport.live] 标记），
+ * 信号更灵敏，但收盘前可能变化或消失；15:00 后自动切换为定型结果。
+ * 盘中量比按已交易时间折算成全天口径。AI 判断（[AiPrompt]）仍只用
+ * 已收盘日线，两边口径不同、互不依赖，结论不一致时都摆出来由用户决定。
  *
  * 设计原则（沿用 README 里消融实验的教训）：
  * - 信号都是**事件触发**（今天首次满足、昨天不满足），不是「处于某状态就天天报」；
@@ -98,7 +101,9 @@ object SignalEngine {
         relative20: Double? = null,
         now: Calendar = Calendar.getInstance()
     ): SignalReport {
-        val series = raw.completed(now = now)
+        // 实时口径：盘中未收盘那根也参与计算，信号更灵敏，但收盘前可能变化。
+        val series = raw
+        val live = raw.hasOpenBar(now)
         val candles = series.candles
         val latest = candles.lastOrNull()
             ?: return SignalReport(SignalTrend.UNKNOWN, "", note = "没有可用的日线数据")
@@ -258,7 +263,8 @@ object SignalEngine {
         val priorLow = closes.subList(maxOf(0, last - BREAKOUT_WINDOW), last).minOrNull()
         val prevPriorHigh = closes.subList(maxOf(0, prev - BREAKOUT_WINDOW), prev).maxOrNull()
         val prevPriorLow = closes.subList(maxOf(0, prev - BREAKOUT_WINDOW), prev).minOrNull()
-        val lastRatio = series.volumeRatio()
+        // 量比：盘中按已交易时间折算成全天口径，否则上午的量永远显得缩量。
+        val lastRatio = if (live) liveVolumeRatio(series, now) else series.volumeRatio()
         if (priorHigh != null && latest.close > priorHigh &&
             (prevPriorHigh == null || candles[prev].close <= prevPriorHigh) &&
             lastRatio != null && lastRatio >= BREAKOUT_VOLUME_RATIO
@@ -344,7 +350,7 @@ object SignalEngine {
 
         // ---- 卖出 2：过热回落（偏离MA20过大或收于上轨外 + 放量回落） ----
         val upper = boll.upper[last]
-        val ratio = series.volumeRatio()
+        val ratio = lastRatio
         val overheated = (vsMa20 != null && vsMa20 >= OVERHEAT_DEVIATION_PCT) ||
             (upper != null && latest.close > upper)
         if (overheated && latest.close < latest.open && ratio != null && ratio >= OVERHEAT_VOLUME_RATIO) {
@@ -482,8 +488,24 @@ object SignalEngine {
             )
         }
 
-        val summary = "收盘 ${priceText(latest.close)} · 相对MA20 ${pctText(vsMa20)} · ${trend.label}"
-        return SignalReport(trend, latest.date, signals, summary)
+        val priceLabel = if (live) "现价" else "收盘"
+        val summary = "$priceLabel ${priceText(latest.close)} · 相对MA20 ${pctText(vsMa20)} · ${trend.label}"
+        return SignalReport(trend, latest.date, signals, summary, live = live)
+    }
+
+    /**
+     * 盘中量比：把当日已成交量按「已交易分钟数」折算成全天口径，再除以
+     * 前 5 日均量。与行情软件的量比定义一致，上午半天的量不会被误判成缩量。
+     */
+    private fun liveVolumeRatio(series: KlineSeries, now: Calendar): Double? {
+        val average = series.averageVolume() ?: return null
+        val volume = series.latest?.volume ?: return null
+        if (average <= 0.0 || volume <= 0.0) return null
+        val minutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+        val morning = (minutes - (9 * 60 + 30)).coerceIn(0, 120)
+        val afternoon = (minutes - 13 * 60).coerceIn(0, 120)
+        val elapsed = (morning + afternoon).coerceAtLeast(1)
+        return (volume / elapsed) / (average / 240.0)
     }
 
     /**
