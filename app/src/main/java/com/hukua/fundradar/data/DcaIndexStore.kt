@@ -25,7 +25,12 @@ class DcaIndexStore(context: Context) {
             val code = item.optString("code")
             val name = item.optString("name")
             if (code.isBlank() || name.isBlank()) continue
-            result += IndexEntry(code, item.optInt("market", 0), name)
+            // 旧版本给 930/931 这类中证代码存过 0 号市场（当时只按「5/6 开头是沪市」
+            // 判断），那种 secid 换不来行情。读出来时按号段纠正，避免清单里的指数
+            // 一直是「日线暂不可用」。
+            val saved = item.optInt("market", 0)
+            val market = indexMarketOf(code) ?: saved
+            result += IndexEntry(code, market, name)
         }
         return result
     }
@@ -38,6 +43,20 @@ class DcaIndexStore(context: Context) {
         if (current.any { it.secid == entry.secid }) return false
         write(current + entry)
         return true
+    }
+
+    /**
+     * 用 K 线返回的真实名称替换占位名。
+     *
+     * 只输代码添加时（搜索服务抖了），名称先放的是代码本身；日线拉回来后
+     * 东财会带着指数名，这里把它写回清单，下次打开就不用再猜。
+     */
+    fun rename(secid: String, name: String) {
+        val clean = name.trim()
+        if (secid.isBlank() || clean.isBlank() || clean == "-") return
+        val current = entries()
+        if (current.none { it.secid == secid && it.name != clean }) return
+        write(current.map { if (it.secid == secid) it.copy(name = clean) else it })
     }
 
     fun remove(secid: String) {

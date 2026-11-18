@@ -202,7 +202,20 @@ class DcaViewModel(context: Context) : ViewModel() {
                 }
             }
 
-            val rows = entries.map { entry ->
+            // 只输代码添加的指数（搜索接口抖的时候），名称先是一串数字。
+            // 日线回来后东财会带指数名，写回清单，下次打开就是真名。
+            val named = HashMap<String, IndexEntry>()
+            entries.forEach { entry ->
+                val series = seriesMap[entry.secid] ?: return@forEach
+                if (entry.name.isNotBlank() && entry.name != entry.code) return@forEach
+                val real = series.name.trim()
+                if (real.isBlank() || real == "-" || real == entry.code) return@forEach
+                indexStore.rename(entry.secid, real)
+                named[entry.secid] = entry.copy(name = real)
+            }
+
+            val rows = entries.map { raw ->
+                val entry = named[raw.secid] ?: raw
                 val series = seriesMap[entry.secid]
                 val plan = plans[entry.secid] ?: DcaPlan()
                 if (series == null) {

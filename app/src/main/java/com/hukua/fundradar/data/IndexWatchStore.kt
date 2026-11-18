@@ -26,7 +26,12 @@ class IndexWatchStore(context: Context) {
             val code = item.optString("code")
             val name = item.optString("name")
             if (code.isBlank() || name.isBlank()) continue
-            result += IndexEntry(code, item.optInt("market", 0), name)
+            // 旧版本给 930/931 这类中证代码存过 0 号市场（当时只按「5/6 开头是沪市」
+            // 判断），那种 secid 换不来行情。读出来时按号段纠正，避免清单里的指数
+            // 一直是「日线暂不可用」。
+            val saved = item.optInt("market", 0)
+            val market = indexMarketOf(code) ?: saved
+            result += IndexEntry(code, market, name)
         }
         return result
     }

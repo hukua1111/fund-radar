@@ -17,6 +17,30 @@ data class IndexEntry(
     val displayName: String get() = name
 }
 
+/**
+ * 指数代码 → 东财市场号（0 深 / 1 沪 / 2 中证自编 / 124 港股指数）。
+ *
+ * 号段是硬的，也是**唯一**能确定的依据：`930697` 家用电器、`H30533` 中国互联网50
+ * 这类中证指数公司自编代码在腾讯、新浪都没有对应符号，只能用 2 号市场去东财取；
+ * 恒生系列（`HSTECH` / `HSI`）走 124。认不出来返回 null —— 宁可交给搜索接口，
+ * 也不瞎给市场号，否则会拿着一个不存在的 secid 反复请求。
+ */
+fun indexMarketOf(code: String): Int? {
+    val text = code.trim().uppercase()
+    if (text.isEmpty()) return null
+    return when {
+        // 930697 家用电器 / 931994 电网设备主题 / 932066 半导体行业精选
+        Regex("^9[3-4]\\d{4}$").matches(text) -> 2
+        // H30533 中国互联网50 / H30184 半导体
+        Regex("^H\\d{4,5}$").matches(text) -> 2
+        // HSTECH 恒生科技 / HSI 恒生指数 / HSCEI 国企指数
+        Regex("^H[A-Z]{2,6}$").matches(text) -> 124
+        Regex("^(000|001|999)\\d{3}$").matches(text) -> 1
+        Regex("^(399|980)\\d{3}$").matches(text) -> 0
+        else -> null
+    }
+}
+
 /** An index that at least one watchlist fund tracks, or that the user added. */
 data class TrackedIndex(
     val entry: IndexEntry,

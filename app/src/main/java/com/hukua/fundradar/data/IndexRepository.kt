@@ -179,11 +179,12 @@ class IndexRepository(context: Context) {
         if (manual.contains(entry.secid)) return@withContext entry
 
         val typedCode = entry.name == entry.code
+        // 用户手敲代码时不会带市场号，只能逐个试：先试号段推荐的那个
+        // （930/931 → 2、HSTECH → 124），再按 0 / 1 / 2 / 124 兜一遍。
+        val byCode = indexMarketOf(entry.code)
         val candidates = if (typedCode) {
-            // A bare code: try the likely venue first, then the other two
-            // (0 深市 / 1 沪市 / 2 中证指数公司).
-            listOf(entry) + listOf(0, 1, 2)
-                .filter { it != entry.market }
+            (listOfNotNull(byCode, entry.market) + listOf(0, 1, 2, 124))
+                .distinct()
                 .map { entry.copy(market = it) }
         } else {
             listOf(entry)
@@ -204,9 +205,12 @@ class IndexRepository(context: Context) {
             }
         }
 
-        if (unreachable && !typedCode) {
-            manual.add(entry)
-            return@withContext entry
+        // 网络不通时：带名字的直接收下；只敲了代码的，号段能认出来才收
+        // （名称先用代码占位，K 线拉回来后回填）。
+        if (unreachable && (!typedCode || byCode != null)) {
+            val resolved = entry.copy(market = byCode ?: entry.market)
+            manual.add(resolved)
+            return@withContext resolved
         }
         null
     }
@@ -225,10 +229,8 @@ class IndexRepository(context: Context) {
         val keyword = query.trim()
         if (keyword.isEmpty()) return@withContext emptyList()
 
-        val eastMoney = runCatching { EastMoneyApi.searchIndices(keyword) }
-            .getOrDefault(emptyList())
-        if (eastMoney.isNotEmpty()) return@withContext eastMoney
-
+        // 东财 suggest 为主，腾讯补中文俗名，代码按号段兜底 —— 全在 IndexSearchApi 里，
+        // 这里不再单独请求一次东财，否则同一个词要发两遍。
         val remote = runCatching { IndexSearchApi.search(keyword) }.getOrDefault(emptyList())
         if (remote.isNotEmpty()) return@withContext remote
 
@@ -236,10 +238,7 @@ class IndexRepository(context: Context) {
         val local = searchCatalog(keyword, catalog)
         if (local.isNotEmpty()) return@withContext local
 
-        if (keyword.length == 6 && keyword.all { it.isDigit() }) {
-            val market = if (keyword.startsWith("5") || keyword.startsWith("6")) 1 else 0
-            return@withContext listOf(IndexEntry(keyword, market, keyword))
-        }
+        IndexSearchApi.guessByCode(keyword)?.let { return@withContext listOf(it) }
         emptyList()
     }
 

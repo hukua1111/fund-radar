@@ -85,6 +85,9 @@ private val DCA_SUGGESTIONS = listOf(
     IndexEntry("399989", 0, "中证医疗"),
     IndexEntry("399967", 0, "中证军工"),
     IndexEntry("399975", 0, "证券公司"),
+    IndexEntry("931151", 2, "光伏产业"),
+    IndexEntry("930697", 2, "家用电器"),
+    IndexEntry("H30533", 2, "中国互联网50"),
     IndexEntry("000688", 1, "科创50"),
     IndexEntry("000300", 1, "沪深300")
 )
@@ -718,8 +721,10 @@ private fun DcaIndexSheet(
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "搜行业或主题，比如「白酒」「半导体」「红利」。指数比基金更适合判断定投价值：" +
-                    "它有十几年的日线，能算清长期趋势和位置，也不会被单只基金的规模、换手带偏。",
+                text = "搜行业或主题，比如「白酒」「半导体」「光伏」；也可以直接输指数代码。" +
+                    "沪深交易所指数、中证自编段（930/931/H30 开头）和港股指数都支持。" +
+                    "指数比基金更适合判断定投价值：它有十几年的日线，能算清长期趋势和位置，" +
+                    "也不会被单只基金的规模、换手带偏。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -731,7 +736,7 @@ private fun DcaIndexSheet(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
-                placeholder = { Text("如 半导体 或 399975") },
+                placeholder = { Text("如 半导体、930697、H30533") },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 trailingIcon = if (state.searching) {
                     {
@@ -779,7 +784,7 @@ private fun DcaIndexSheet(
 
                 state.results.isEmpty() && !state.searching -> {
                     Text(
-                        text = "没有搜到，换个关键词或直接输入 6 位指数代码",
+                        text = "没有搜到。换个关键词，或直接输入指数代码（930697、H30533）",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = 12.dp)

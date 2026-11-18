@@ -105,6 +105,72 @@ class IndexSearchTest {
     }
 
     @Test
+    fun mergesEastMoneyFirstAndDropsDuplicates() {
+        // 东财能给 930/931/H30，腾讯只能给沪深；同一 secid 只留第一条。
+        val eastMoney = listOf(
+            IndexEntry("930697", 2, "家用电器"),
+            IndexEntry("931994", 2, "电网设备主题")
+        )
+        val tencent = listOf(
+            IndexEntry("931994", 2, "电网设备主题"),
+            IndexEntry("399997", 0, "中证白酒")
+        )
+
+        val merged = IndexSearchApi.merge(eastMoney, tencent)
+
+        assertEquals(3, merged.size)
+        assertEquals("2.930697", merged[0].secid)
+        assertEquals("2.931994", merged[1].secid)
+        assertEquals("0.399997", merged[2].secid)
+    }
+
+    @Test
+    fun guessByCodeKnowsCsiAndHangSengSegments() {
+        // 中证指数公司自编段：930/931/932 与 H + 数字
+        assertEquals(2, IndexSearchApi.guessByCode("930697")?.market)
+        assertEquals(2, IndexSearchApi.guessByCode("931994")?.market)
+        assertEquals(2, IndexSearchApi.guessByCode("932066")?.market)
+        assertEquals(2, IndexSearchApi.guessByCode("H30533")?.market)
+        assertEquals(2, IndexSearchApi.guessByCode("h30184")?.market)
+
+        // 恒生系列走 124
+        assertEquals(124, IndexSearchApi.guessByCode("HSTECH")?.market)
+        assertEquals("124.HSI", IndexSearchApi.guessByCode("HSI")?.secid)
+
+        // 交易所挂牌的指数不变
+        assertEquals("1.000300", IndexSearchApi.guessByCode("000300")?.secid)
+        assertEquals("0.399997", IndexSearchApi.guessByCode("399997")?.secid)
+
+        // 认不出来的不猜
+        assertEquals(null, IndexSearchApi.guessByCode("白酒"))
+        assertEquals(null, IndexSearchApi.guessByCode("12345"))
+    }
+
+    @Test
+    fun codeTermsRetriesLowercaseCodesInUpperCase() {
+        // 东财 suggest 对大小写敏感：h30533 搜不到，H30533 才行
+        assertEquals(listOf("h30533", "H30533"), IndexSearchApi.codeTerms("h30533"))
+        assertEquals(listOf("hstech", "HSTECH"), IndexSearchApi.codeTerms("hstech"))
+        // 中文与纯数字不需要重试
+        assertEquals(listOf("半导体"), IndexSearchApi.codeTerms("半导体"))
+        assertEquals(listOf("930697"), IndexSearchApi.codeTerms("930697"))
+    }
+
+    @Test
+    fun rankPutsExactMatchFirst() {
+        val hits = listOf(
+            IndexEntry("931743", 2, "半导体材料设备"),
+            IndexEntry("932066", 2, "半导体行业精选"),
+            IndexEntry("H30184", 2, "半导体")
+        )
+
+        val ranked = IndexSearchApi.rank("半导体", hits)
+
+        assertEquals("半导体", ranked.first().name)
+        assertEquals(3, ranked.size)
+    }
+
+    @Test
     fun endpointAcceptsSloppyInput() {
         assertEquals(
             "http://160.202.238.171:8080/v1/chat/completions",

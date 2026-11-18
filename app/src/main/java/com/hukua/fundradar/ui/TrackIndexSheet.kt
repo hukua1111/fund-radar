@@ -193,7 +193,7 @@ fun TrackIndexSheetContent(
 
             state.results.isEmpty() && !state.searching -> {
                 Text(
-                    text = "没有搜到，换个关键词或直接输入 6 位指数代码",
+                    text = "没有搜到。换个关键词，或直接输入指数代码（930697、H30533）",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 12.dp)
@@ -255,9 +255,11 @@ private fun TrackIndexRow(
     }
 }
 
-/** 0 深市 / 1 沪市 / 2 中证指数公司自有代码。 */
+/** 0 深市 / 1 沪市 / 2 中证指数公司自有代码 / 124、100 港股指数。 */
 internal fun marketLabel(market: Int): String = when (market) {
     1 -> "沪市"
     2 -> "中证指数"
+    124, 100 -> "港股指数"
+    116 -> "港股"
     else -> "深市"
 }

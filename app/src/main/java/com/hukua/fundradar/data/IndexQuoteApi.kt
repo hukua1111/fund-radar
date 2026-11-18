@@ -144,10 +144,16 @@ object IndexQuoteApi {
         }.toMap()
     }
 
-    /** `1.000300` → `sh000300`，`0.399006` → `sz399006`；中证（market=2）没有。 */
+    /**
+     * `1.000300` → `sh000300`，`0.399006` → `sz399006`。
+     *
+     * 中证（market=2）没有对应符号，只能走东财；港股指数（124 / 100）腾讯认
+     * `hkHSTECH` / `hkHSI`，字段位置与前 33 位和 A 股一致，可以当备源用。
+     */
     internal fun tencentSymbol(entry: IndexEntry): String? = when (entry.market) {
         1 -> "sh${entry.code}"
         0 -> "sz${entry.code}"
+        124, 100 -> "hk${entry.code}"
         else -> null
     }
 
