@@ -64,3 +64,21 @@ val IndexTabIcon: ImageVector = tabIcon("IndexTab") {
     lineTo(13f, 14.5f)
     lineTo(20f, 6.5f)
 }
+
+/** A calendar with a rising line: the recurring-investment tab. */
+val DcaTabIcon: ImageVector = tabIcon("DcaTab") {
+    moveTo(4.5f, 7.5f)
+    lineTo(19.5f, 7.5f)
+    lineTo(19.5f, 19.5f)
+    lineTo(4.5f, 19.5f)
+    close()
+    moveTo(8f, 4.5f)
+    lineTo(8f, 8.5f)
+    moveTo(16f, 4.5f)
+    lineTo(16f, 8.5f)
+    moveTo(8f, 16.5f)
+    lineTo(11f, 13.5f)
+    lineTo(13.5f, 15.5f)
+    lineTo(17f, 11.5f)
+}
+

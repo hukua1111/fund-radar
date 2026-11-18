@@ -179,6 +179,46 @@ object AiAdvisor {
         }
     }
 
+    /**
+     * 定投页用：把 [DcaPrompt] 拼好的提示词发出去，返回模型原文。
+     *
+     * 只负责传输，解析放在 [parseDcaAdvice] —— 两件事分开，提示词、请求、解析
+     * 各自能单测，出问题时也容易定位是哪一段坏了。
+     */
+    suspend fun consult(config: AiConfig, prompt: JudgePrompt): String = withContext(Dispatchers.IO) {
+        require(config.configured) { "还没有配置 AI 接口" }
+        chat(config, prompt)
+    }
+
+    /** 把定投判断的回复解析成 [DcaAiAdvice]，容忍 ```json 围栏和前后废话。 */
+    internal fun parseDcaAdvice(content: String, prompt: String = ""): DcaAiAdvice {
+        val json = content.let { text ->
+            val start = text.indexOf('{')
+            val end = text.lastIndexOf('}')
+            if (start >= 0 && end > start) text.substring(start, end + 1) else text
+        }
+        val parsed = runCatching { JSONObject(json) }.getOrNull()
+            ?: return DcaAiAdvice(
+                stance = DcaStance.UNKNOWN,
+                confidence = 0,
+                reason = content,
+                risk = "",
+                next = "",
+                raw = content,
+                prompt = prompt
+            )
+
+        return DcaAiAdvice(
+            stance = DcaStance.of(parsed.optString("stance")),
+            confidence = parsed.optInt("confidence", 0).coerceIn(0, 100),
+            reason = parsed.optString("reason").ifBlank { parsed.optString("message") },
+            risk = parsed.optString("risk"),
+            next = parsed.optString("next").ifBlank { parsed.optString("action") },
+            raw = content,
+            prompt = prompt
+        )
+    }
+
     /** Quick connectivity check used by the settings screen. */
     suspend fun testConnection(config: AiConfig): String = withContext(Dispatchers.IO) {
         require(config.configured) { "请先填写地址、模型和 Key" }

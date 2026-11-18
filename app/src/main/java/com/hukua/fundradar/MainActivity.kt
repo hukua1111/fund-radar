@@ -16,11 +16,16 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.hukua.fundradar.data.DcaPlan
 import com.hukua.fundradar.data.FundScope
 import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.SettingsStore
 import com.hukua.fundradar.data.isTradingTime
 import com.hukua.fundradar.ui.AppBottomBar
+import com.hukua.fundradar.ui.DcaDetailScreen
+import com.hukua.fundradar.ui.DcaPlanSheet
+import com.hukua.fundradar.ui.DcaScreen
+import com.hukua.fundradar.ui.DcaViewModel
 import com.hukua.fundradar.ui.FundDetailScreen
 import com.hukua.fundradar.ui.FundRadarScreen
 import com.hukua.fundradar.ui.FundViewModel
@@ -31,6 +36,7 @@ import com.hukua.fundradar.ui.KlineViewModel
 import com.hukua.fundradar.ui.SettingsScreen
 import com.hukua.fundradar.ui.SignalScreen
 import com.hukua.fundradar.ui.SignalViewModel
+import com.hukua.fundradar.ui.TAB_DCA
 import com.hukua.fundradar.ui.TAB_LIMIT
 import com.hukua.fundradar.ui.TAB_PORTFOLIO
 import com.hukua.fundradar.ui.TAB_SIGNAL
@@ -76,6 +82,12 @@ class MainActivity : ComponentActivity() {
                     key = "fund-limit",
                     factory = FundViewModel.factory(this, FundScope.LIMIT)
                 )
+                // 定投页自己的清单：和持仓、限购互不共享，但持仓记录仍读同一份。
+                val dcaFundViewModel: FundViewModel = viewModel(
+                    key = "fund-dca",
+                    factory = FundViewModel.factory(this, FundScope.DCA)
+                )
+                val dcaViewModel: DcaViewModel = viewModel(factory = DcaViewModel.factory(this))
                 val indexViewModel: IndexViewModel = viewModel(factory = IndexViewModel.factory(this))
                 val signalViewModel: SignalViewModel = viewModel(factory = SignalViewModel.factory(this))
 
@@ -89,9 +101,15 @@ class MainActivity : ComponentActivity() {
                 val limitHoldingSheet by limitViewModel.holdingSheet.collectAsStateWithLifecycle()
                 val indexState by indexViewModel.state.collectAsStateWithLifecycle()
 
+                val dcaFundState by dcaFundViewModel.state.collectAsStateWithLifecycle()
+                val dcaState by dcaViewModel.state.collectAsStateWithLifecycle()
+                val dcaHoldingSheet by dcaFundViewModel.holdingSheet.collectAsStateWithLifecycle()
+
                 var route by rememberSaveable { mutableStateOf("list") }
                 var tab by rememberSaveable { mutableStateOf(TAB_PORTFOLIO) }
                 var settingsReturn by rememberSaveable { mutableStateOf("list") }
+                var planSheetCode by rememberSaveable { mutableStateOf<String?>(null) }
+                var planSheetName by rememberSaveable { mutableStateOf("") }
 
                 val isLimitTab = tab == TAB_LIMIT
                 val activeViewModel = if (isLimitTab) limitViewModel else portfolioViewModel
@@ -113,6 +131,10 @@ class MainActivity : ComponentActivity() {
                     when (route) {
                         "settings" -> route = settingsReturn
                         "fund" -> backToList()
+                        "dca" -> {
+                            dcaViewModel.closeDetail()
+                            route = "list"
+                        }
                         else -> route = "list"
                     }
                 }
@@ -122,7 +144,7 @@ class MainActivity : ComponentActivity() {
                 // 所以进持仓页时后台解析一次「基金 → 指数」，不再跟着估算轮询。
                 val lifecycle = LocalLifecycleOwner.current.lifecycle
                 LaunchedEffect(tab, route, lifecycle) {
-                    if (route != "list") return@LaunchedEffect
+                    if (route != "list" && route != "dca") return@LaunchedEffect
                     when (tab) {
                         TAB_PORTFOLIO -> lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                             indexViewModel.load()
@@ -136,6 +158,15 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
+                        // 定投页的估算跟持仓页同一套：卡片上的涨跌、持仓收益、止盈判断
+                        // 都要用到，所以也按 5 秒一轮走。
+                        TAB_DCA -> lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                            while (true) {
+                                dcaFundViewModel.refreshEstimates()
+                                delay(if (isTradingTime()) LIST_TICK_MS else LIST_IDLE_TICK_MS)
+                            }
+                        }
+
                         // 信号页实时口径：盘中含当日实时 bar，交易时段每分钟重算
                         // （K 线缓存 2 分钟 TTL，实际网络请求约两分钟一次）；
                         // 非交易时段降频，只为发现开盘 / 收盘定型。手动刷新走页内按钮。
@@ -145,6 +176,18 @@ class MainActivity : ComponentActivity() {
                                 delay(if (isTradingTime()) SIGNAL_TICK_MS else SIGNAL_IDLE_TICK_MS)
                             }
                         }
+                    }
+                }
+
+                // 定投详情页里记完一笔买卖，结论要跟着新的成本走 —— 列表页的
+                // 重算挂在 DcaScreen 里，详情页不在组合中，这里补一次。
+                LaunchedEffect(route, dcaFundState.holdings, dcaFundState.all) {
+                    if (route == "dca") {
+                        dcaViewModel.evaluate(
+                            dcaFundState.all,
+                            dcaFundState.holdings,
+                            dcaFundState.estimates
+                        )
                     }
                 }
 
@@ -281,7 +324,87 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    "dca" -> {
+                        val code = dcaState.selected
+                        val fund = dcaFundState.all.firstOrNull { it.code == code }
+                            ?: dcaState.rowOf(code)?.fund
+                        if (fund == null) {
+                            LaunchedEffect(Unit) { route = "list" }
+                        } else {
+                            DcaDetailScreen(
+                                fund = fund,
+                                row = dcaState.rowOf(fund.code),
+                                estimate = dcaFundState.estimates[fund.code],
+                                advice = dcaState.advice[fund.code],
+                                holding = dcaFundState.holdings[fund.code]
+                                    ?.takeUnless { it.isEmpty },
+                                aiLoading = dcaState.aiLoading == fund.code,
+                                aiError = dcaState.aiError[fund.code],
+                                onBack = {
+                                    dcaViewModel.closeDetail()
+                                    route = "list"
+                                },
+                                onAskAi = { dcaViewModel.askAi(fund.code) },
+                                onEditPlan = {
+                                    planSheetCode = fund.code
+                                    planSheetName = fund.name
+                                },
+                                onRemove = {
+                                    // 只从定投清单移除，持仓记录留在原处。
+                                    dcaFundViewModel.removeFromList(fund.code)
+                                    dcaViewModel.forget(fund.code)
+                                    route = "list"
+                                },
+                                onBuy = { dcaFundViewModel.openHoldingSheet(fund, HoldingMode.BUY) },
+                                onSell = { dcaFundViewModel.openHoldingSheet(fund, HoldingMode.SELL) },
+                                onEditHolding = {
+                                    dcaFundViewModel.openHoldingSheet(fund, HoldingMode.EDIT)
+                                },
+                                onRemoveHolding = { dcaFundViewModel.removeHolding(fund.code) }
+                            )
+
+                            if (dcaHoldingSheet.open) {
+                                HoldingSheet(
+                                    state = dcaHoldingSheet,
+                                    onModeChange = dcaFundViewModel::onHoldingModeChange,
+                                    onSharesChange = dcaFundViewModel::onHoldingSharesChange,
+                                    onCostChange = dcaFundViewModel::onHoldingCostChange,
+                                    onAmountChange = dcaFundViewModel::onHoldingAmountChange,
+                                    onNavChange = dcaFundViewModel::onHoldingNavChange,
+                                    onFillAll = dcaFundViewModel::fillAllShares,
+                                    onSubmit = dcaFundViewModel::submitHolding,
+                                    onDismiss = dcaFundViewModel::closeHoldingSheet,
+                                    onCostInputChange = dcaFundViewModel::onHoldingCostInputChange
+                                )
+                            }
+
+                            val sheetCode = planSheetCode
+                            if (sheetCode != null) {
+                                DcaPlanSheet(
+                                    fundName = planSheetName,
+                                    initial = dcaState.plans[sheetCode] ?: DcaPlan(),
+                                    onSave = { plan ->
+                                        dcaViewModel.savePlan(sheetCode, plan)
+                                        planSheetCode = null
+                                    },
+                                    onDismiss = { planSheetCode = null }
+                                )
+                            }
+                        }
+                    }
+
                     else -> when (tab) {
+                        TAB_DCA -> DcaScreen(
+                            fundViewModel = dcaFundViewModel,
+                            dcaViewModel = dcaViewModel,
+                            onOpenSettings = openSettings,
+                            onOpenDetail = { fund ->
+                                dcaViewModel.openDetail(fund.code)
+                                route = "dca"
+                            },
+                            bottomBar = bottomBar
+                        )
+
                         TAB_LIMIT -> FundRadarScreen(
                             viewModel = limitViewModel,
                             onOpenSettings = openSettings,
