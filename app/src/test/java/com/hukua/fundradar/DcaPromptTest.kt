@@ -3,11 +3,11 @@ package com.hukua.fundradar
 import com.hukua.fundradar.data.AiAdvisor
 import com.hukua.fundradar.data.Candle
 import com.hukua.fundradar.data.DcaEngine
+import com.hukua.fundradar.data.DcaFrequency
 import com.hukua.fundradar.data.DcaPlan
 import com.hukua.fundradar.data.DcaPrompt
 import com.hukua.fundradar.data.DcaStance
-import com.hukua.fundradar.data.Fund
-import com.hukua.fundradar.data.Holding
+import com.hukua.fundradar.data.IndexEntry
 import com.hukua.fundradar.data.KlineSeries
 import com.hukua.fundradar.data.KlineSource
 import org.junit.Assert.assertEquals
@@ -18,10 +18,13 @@ import java.util.Calendar
 /**
  * 定投提示词与 AI 回复解析。
  *
- * 提示词必须把「计划」和「我的成本」带进去 —— 少了这两块，模型只能对着 K 线说
- * 空话，「已经投了几期、赚了多少、止盈线在哪」这些才是定投决策的依据。
+ * 提示词必须把「计划」和「按计划回放出来的持仓」带进去 —— 少了这两块，模型只能
+ * 对着 K 线说空话，「多久投一次、已经投了几期、赚了多少、止盈线在哪」才是定投
+ * 决策的依据。
  */
 class DcaPromptTest {
+
+    private val entry = IndexEntry("399997", 0, "中证白酒")
 
     private fun at(year: Int, month: Int, day: Int): Calendar =
         Calendar.getInstance().apply {
@@ -50,73 +53,63 @@ class DcaPromptTest {
             )
             calendar.add(Calendar.DAY_OF_YEAR, 1)
         }
-        return KlineSeries("000905", "中证500", KlineSource.EXCHANGE, candles)
+        return KlineSeries("399997", "中证白酒", KlineSource.EXCHANGE, candles)
     }
 
-    private val fund = Fund(
-        code = "161725",
-        name = "招商中证白酒",
-        type = "指数型",
-        nav = 1.2345,
-        navDate = "2026-09-01",
-        riskLevel = 4,
-        trackIndex = "中证白酒指数"
-    )
-
     private val plan = DcaPlan(
-        monthlyAmount = 1000.0,
-        day = 8,
-        startMonth = "2025-03",
-        targetProfitPct = 30.0
+        amount = 1000.0,
+        frequency = DcaFrequency.MONTHLY,
+        dayOfMonth = 8,
+        startDate = "2026-03-01",
+        targetProfitPct = 30.0,
+        note = "场外另有一笔 2 万的底仓"
     )
-
-    private val holding = Holding(shares = 8000.0, cost = 9000.0)
 
     @Test
-    fun promptCarriesPlanAndCost() {
+    fun promptCarriesPlanAndReplayedPosition() {
         val series = series()
         val report = DcaEngine.evaluate(
-            fund = fund,
+            entry = entry,
             series = series,
-            holding = holding,
             plan = plan,
             now = at(2027, 1, 1)
         )
         val text = DcaPrompt.build(
-            fund = fund,
+            entry = entry,
             series = series,
             report = report,
-            holding = holding,
             plan = plan,
             now = at(2027, 1, 1)
         ).render()
 
+        assertTrue(text.contains("【定投标的】"))
+        assertTrue(text.contains("中证白酒"))
         assertTrue(text.contains("【我的定投计划】"))
+        assertTrue(text.contains("每月 8 日"))
+        assertTrue(text.contains("止盈线"))
+        assertTrue(text.contains("【按计划回放出来的持仓】"))
         assertTrue(text.contains("已投"))
         assertTrue(text.contains("累计投入"))
-        assertTrue(text.contains("【我的持仓】"))
-        assertTrue(text.contains("成本单价"))
         assertTrue(text.contains("浮动盈亏"))
+        assertTrue("补充说明要原样带上", text.contains("场外另有一笔 2 万的底仓"))
         assertTrue(text.contains("stance"))
         assertTrue(text.contains("CONTINUE"))
-        assertTrue(text.contains("止盈线"))
     }
 
     @Test
-    fun promptSaysSoWhenNothingIsFilled() {
+    fun promptSaysSoWhenNoPlanYet() {
         val series = series()
-        val report = DcaEngine.evaluate(fund = fund, series = series, now = at(2027, 1, 1))
+        val report = DcaEngine.evaluate(entry = entry, series = series, now = at(2027, 1, 1))
         val text = DcaPrompt.build(
-            fund = fund,
+            entry = entry,
             series = series,
             report = report,
-            holding = null,
             plan = DcaPlan(),
             now = at(2027, 1, 1)
         ).render()
 
-        assertTrue(text.contains("还没填持仓"))
         assertTrue(text.contains("尚未设定投计划"))
+        assertTrue(text.contains("没有补充"))
     }
 
     @Test

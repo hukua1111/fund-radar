@@ -2,53 +2,61 @@ package com.hukua.fundradar.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -57,83 +65,73 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.hukua.fundradar.data.DcaAction
 import com.hukua.fundradar.data.DcaVerdict
-import com.hukua.fundradar.data.Estimate
-import com.hukua.fundradar.data.Fund
+import com.hukua.fundradar.data.IndexEntry
+import com.hukua.fundradar.data.amountText
 import com.hukua.fundradar.data.growthText
 import com.hukua.fundradar.data.money
-import com.hukua.fundradar.data.navText
-import com.hukua.fundradar.data.signedAmountText
 import com.hukua.fundradar.ui.theme.LocalMarketColors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * 「定投」页：一份独立的基金清单，回答两个问题 ——
+ * 空页面推荐的行业主题指数。
  *
- * 1. 这个行业 / 指数基金还值不值得按月买（左侧评分 + 五档依据）；
- * 2. 已经在投的这只，现在该继续、减半、暂停，还是止盈卖出（右侧动作）。
+ * 只放几个口径清楚的行业指数，剩下的交给搜索 —— 各家「新能源」「半导体」有好几个
+ * 版本，与其猜，不如让用户自己搜到确切那一只。
+ */
+private val DCA_SUGGESTIONS = listOf(
+    IndexEntry("399997", 0, "中证白酒"),
+    IndexEntry("399989", 0, "中证医疗"),
+    IndexEntry("399967", 0, "中证军工"),
+    IndexEntry("399975", 0, "证券公司"),
+    IndexEntry("000688", 1, "科创50"),
+    IndexEntry("000300", 1, "沪深300")
+)
+
+/**
+ * 「定投」页：观察的是**行业主题指数**，不是某只基金。
  *
- * 判断全部来自跟踪指数的日线本地计算，AI 只是可选的第二意见，点了才请求。
+ * 卡片上三块信息：这个行业值不值得按计划买（评分）、现在该干什么（动作）、
+ * 按我的计划已经投出了什么（期数 / 投入 / 市值 / 收益）。
  */
 @Composable
 fun DcaScreen(
-    fundViewModel: FundViewModel,
-    dcaViewModel: DcaViewModel,
+    viewModel: DcaViewModel,
     onOpenSettings: () -> Unit = {},
-    onOpenDetail: (Fund) -> Unit = {},
+    onOpenDetail: (DcaRow) -> Unit = {},
     bottomBar: @Composable () -> Unit = {}
 ) {
-    val fundState by fundViewModel.state.collectAsStateWithLifecycle()
-    val addState by fundViewModel.add.collectAsStateWithLifecycle()
-    val dcaState by dcaViewModel.state.collectAsStateWithLifecycle()
+    val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 基金列表、持仓、估算都由持仓页那套 view model 负责，这里只把结果推给定投判断。
-    val codesKey = fundState.all.joinToString(",") { it.code }
-    LaunchedEffect(codesKey, fundState.holdings, fundState.estimates) {
-        dcaViewModel.evaluate(fundState.all, fundState.holdings, fundState.estimates)
-    }
-
-    val error = dcaState.error ?: fundState.error
+    val error = state.error
     LaunchedEffect(error) {
         if (error != null) {
-            snackbarHostState.showSnackbar(error)
-            dcaViewModel.consumeError()
-            fundViewModel.consumeError()
+            snackbarHostState.showSnackbar("刷新失败：$error")
+            viewModel.consumeError()
         }
     }
 
     DcaContent(
-        state = dcaState,
-        estimates = fundState.estimates,
-        loading = fundState.loading || dcaState.loading,
+        state = state,
         snackbarHostState = snackbarHostState,
-        onRefresh = {
-            fundViewModel.refresh()
-            dcaViewModel.refresh()
-        },
-        onAddClick = fundViewModel::openAdd,
-        onSelectFilter = dcaViewModel::setFilter,
+        onRefresh = { viewModel.refresh(force = true) },
+        onAddClick = viewModel::openPicker,
+        onPickSuggestion = viewModel::addIndex,
+        onSelectFilter = viewModel::setFilter,
+        onOpenDetail = onOpenDetail,
         onOpenSettings = onOpenSettings,
-        onOpenDetail = { fund ->
-            dcaViewModel.openDetail(fund.code)
-            onOpenDetail(fund)
-        },
-        onAskAi = { fund ->
-            dcaViewModel.askAi(fund.code)
-            dcaViewModel.openDetail(fund.code)
-            onOpenDetail(fund)
-        },
         bottomBar = bottomBar
     )
 
-    if (addState.open) {
-        AddFundSheet(
-            state = addState,
-            onQueryChange = fundViewModel::onQueryChange,
-            onAddFund = fundViewModel::addFund,
-            onDismiss = fundViewModel::closeAdd
+    if (state.picker.open) {
+        DcaIndexSheet(
+            state = state.picker,
+            existing = state.rows.map { it.secid }.toSet(),
+            onQueryChange = viewModel::onPickerQueryChange,
+            onPick = viewModel::addIndex,
+            onDismiss = viewModel::closePicker
         )
     }
 }
@@ -142,18 +140,18 @@ fun DcaScreen(
 @Composable
 fun DcaContent(
     state: DcaUiState,
-    estimates: Map<String, Estimate> = emptyMap(),
-    loading: Boolean = false,
-    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
-    onRefresh: () -> Unit = {},
-    onAddClick: () -> Unit = {},
-    onSelectFilter: (DcaFilter) -> Unit = {},
-    onOpenSettings: () -> Unit = {},
-    onOpenDetail: (Fund) -> Unit = {},
-    onAskAi: (Fund) -> Unit = {},
+    snackbarHostState: SnackbarHostState,
+    onRefresh: () -> Unit,
+    onAddClick: () -> Unit,
+    onPickSuggestion: (IndexEntry) -> Unit,
+    onSelectFilter: (DcaFilter) -> Unit,
+    onOpenDetail: (DcaRow) -> Unit,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier,
     bottomBar: @Composable () -> Unit = {}
 ) {
     Scaffold(
+        modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = bottomBar,
@@ -167,18 +165,18 @@ fun DcaContent(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "定投价值 · 加减速 · 止盈提醒",
+                            text = "行业主题指数 · 值不值得投，现在要不要停",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 },
                 actions = {
-                    IconButton(onClick = onAddClick) {
-                        Icon(Icons.Filled.Add, contentDescription = "添加基金")
-                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = "设置")
+                    }
+                    IconButton(onClick = onAddClick) {
+                        Icon(Icons.Filled.Add, contentDescription = "添加行业指数")
                     }
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Filled.Refresh, contentDescription = "刷新")
@@ -191,8 +189,14 @@ fun DcaContent(
             )
         }
     ) { innerPadding ->
-        if (state.watchlistEmpty && !loading) {
-            EmptyDca(innerPadding, onAddClick)
+        if (state.empty && !state.loading) {
+            EmptyDca(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                onAddClick = onAddClick,
+                onPickSuggestion = onPickSuggestion
+            )
             return@Scaffold
         }
 
@@ -210,76 +214,53 @@ fun DcaContent(
             ) {
                 item(key = "summary") { DcaSummaryCard(state) }
 
-                item(key = "filter") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        DcaFilter.entries.forEach { filter ->
-                            FilterChip(
-                                selected = state.filter == filter,
-                                onClick = { onSelectFilter(filter) },
-                                label = { Text(filter.label) },
-                                leadingIcon = if (state.filter == filter) {
-                                    {
-                                        Icon(
-                                            imageVector = Icons.Filled.Check,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                } else {
-                                    null
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            )
-                        }
+                if (state.rows.isNotEmpty()) {
+                    item(key = "filter") {
+                        DcaFilterBar(
+                            selected = state.filter,
+                            total = state.rows.size,
+                            good = state.goodCount,
+                            slow = state.pauseCount,
+                            profit = state.profitCount,
+                            onSelect = onSelectFilter
+                        )
                     }
                 }
 
-                if (loading && state.rows.isEmpty()) {
-                    items(count = 3, key = { "skeleton-$it" }) { DcaSkeletonCard() }
-                } else if (state.visible.isEmpty()) {
-                    item(key = "empty-filter") {
+                if (state.loading) {
+                    items(3) { DcaSkeletonCard() }
+                } else {
+                    items(items = state.visible, key = { it.secid }) { row ->
+                        DcaCard(row = row, onClick = { onOpenDetail(row) })
+                    }
+                }
+
+                if (!state.loading && state.visible.isEmpty()) {
+                    item(key = "no-match") {
                         Text(
-                            text = if (state.rows.isEmpty()) {
-                                "正在读取跟踪指数与日线，稍等一下…"
-                            } else {
-                                "这个筛选下没有基金，换个分类看看"
-                            },
+                            text = "这个筛选下没有指数，换个筛选看看",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 20.dp)
-                        )
-                    }
-                } else {
-                    items(items = state.visible, key = { it.fund.code }) { row ->
-                        DcaCard(
-                            row = row,
-                            estimate = estimates[row.fund.code],
-                            onClick = { onOpenDetail(row.fund) },
-                            onAskAi = { onAskAi(row.fund) }
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 28.dp),
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
 
-                item(key = "footer") {
-                    Text(
-                        text = "定投评分看长期趋势、位置、波动与热度，全部由跟踪指数的日线本地计算；" +
-                            "不含费率、持有期与申赎时点，仅供参考，不构成投资建议",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp)
-                    )
+                if (state.updatedAt > 0) {
+                    item(key = "updated") {
+                        Text(
+                            text = "更新于 ${timeText(state.updatedAt)} · 日线口径，盘中不重算",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 4.dp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         }
@@ -287,238 +268,308 @@ fun DcaContent(
 }
 
 @Composable
-private fun EmptyDca(innerPadding: PaddingValues, onAddClick: () -> Unit) {
+private fun EmptyDca(
+    modifier: Modifier,
+    onAddClick: () -> Unit,
+    onPickSuggestion: (IndexEntry) -> Unit
+) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(innerPadding)
-            .padding(horizontal = 28.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        modifier = modifier
+            .padding(horizontal = 28.dp)
+            .padding(top = 60.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+        Spacer(Modifier.height(18.dp))
         Text(
-            text = "还没有定投基金",
+            text = "先挑几个行业指数",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "定投是单独的一份清单，和持仓、限购互不影响。" +
-                "加进来的基金会按跟踪指数判断值不值得按月买，已经投的会提示继续、减半、暂停还是止盈。",
-            style = MaterialTheme.typography.bodyMedium,
+            text = "定投看的是指数本身，不是某只基金 —— 同一个行业指数下面有 ETF、场外指基、" +
+                "增强基金好几种买法。先把行业加进来，再判断值不值得按月买。",
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(20.dp))
-        Button(onClick = onAddClick) {
+        Spacer(Modifier.height(24.dp))
+        Button(onClick = onAddClick, shape = RoundedCornerShape(14.dp)) {
             Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("添加定投基金")
+            Spacer(Modifier.width(8.dp))
+            Text("添加行业指数")
+        }
+        Spacer(Modifier.height(20.dp))
+        Text(
+            text = "常用行业指数",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            DCA_SUGGESTIONS.forEach { entry ->
+                SuggestionChip(onClick = { onPickSuggestion(entry) }, label = { Text(entry.name) })
+            }
         }
     }
 }
 
 @Composable
 private fun DcaSummaryCard(state: DcaUiState) {
-    val market = LocalMarketColors.current
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
     ) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                SummaryCell("在观察", "${state.rows.size} 个", Modifier.weight(1f))
+                SummaryCell("适合定投", "${state.goodCount} 个", Modifier.weight(1f))
+                SummaryCell("建议减/停", "${state.pauseCount} 个", Modifier.weight(1f))
+                SummaryCell("建议止盈", "${state.profitCount} 个", Modifier.weight(1f))
+            }
+
+            if (state.investedTotal > 0) {
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "按计划累计投入 ${money(state.investedTotal)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "市值 ${money(state.valueTotal)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = amountText(state.profitTotal),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = growthColor(state.profitTotal)
+                        )
+                        Text(
+                            text = state.profitPct?.let { growthText(it) } ?: "—",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = growthColor(state.profitTotal)
+                        )
+                    }
+                }
+            } else if (state.rows.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "定投 ${state.rows.size} 只",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(Modifier.width(14.dp))
-                Text(
-                    text = if (state.monthlyTotal > 0) "月度计划 " + money(state.monthlyTotal) else "未设计划",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = "还没有指数设了定投计划 · 点进任意一个，设好频率和金额就能看到回放出来的持仓",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.weight(1f))
-                if (state.loading || state.refreshing) {
-                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
-                }
             }
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "适合 ${state.goodCount}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = "建议减/停 ${state.pauseCount}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.tertiary
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = "建议止盈 ${state.profitCount}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (state.profitCount > 0) market.down
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+        }
+    }
+}
+
+@Composable
+private fun SummaryCell(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DcaFilterBar(
+    selected: DcaFilter,
+    total: Int,
+    good: Int,
+    slow: Int,
+    profit: Int,
+    onSelect: (DcaFilter) -> Unit
+) {
+    val options = DcaFilter.entries
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        options.forEachIndexed { index, option ->
+            val count = when (option) {
+                DcaFilter.ALL -> total
+                DcaFilter.GOOD -> good
+                DcaFilter.SLOW -> slow
+                DcaFilter.PROFIT -> profit
             }
-            if (state.holdingValue > 0) {
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            SegmentedButton(
+                selected = selected == option,
+                onClick = { onSelect(option) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
+                enabled = count > 0,
+                colors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                    inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                icon = {},
+                label = {
                     Text(
-                        text = "持仓 " + money(state.holdingValue),
+                        text = "${option.label} $count",
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    val profit = state.holdingProfit
-                    Text(
-                        text = "累计 " + signedAmountText(profit) + " 元",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (profit >= 0) market.up else market.down
+                        maxLines = 1
                     )
                 }
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "更新于 " + timeText(state.updatedAt) +
-                    if (state.live) " · 盘中有实时行情，收盘前评分可能变化"
-                    else " · 已收盘定型",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
 }
 
 @Composable
-private fun DcaCard(
-    row: DcaRow,
-    estimate: Estimate?,
-    onClick: () -> Unit,
-    onAskAi: () -> Unit
-) {
-    val market = LocalMarketColors.current
+private fun DcaCard(row: DcaRow, onClick: () -> Unit) {
     val report = row.report
+    val verdict = report?.verdict ?: DcaVerdict.WATCH
+    val action = report?.action ?: DcaAction.PAUSE
+    val accent = verdictColor(verdict)
+
     Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.Top) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = row.fund.name,
-                        style = MaterialTheme.typography.bodyLarge,
+                        text = row.displayName.ifBlank { row.entry.code },
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(3.dp))
                     Text(
-                        text = listOf(row.fund.code, row.indexName.ifBlank { row.fund.type })
-                            .filter { it.isNotBlank() }
-                            .joinToString("  ·  "),
+                        text = "${row.entry.code} · ${marketLabel(row.entry.market)}行业指数",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Spacer(Modifier.width(10.dp))
-                if (report != null) {
-                    ScoreBadge(report.score, report.verdict, verdictColor(report.verdict))
+                Column(horizontalAlignment = Alignment.End) {
+                    val change = row.changePct
+                    Text(
+                        text = change?.let { growthText(it) } ?: "—",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = change?.let { growthColor(it) }
+                            ?: MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "最新日线",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            if (report == null) {
+                Text(
+                    text = row.note.ifBlank { "行情暂不可用" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                return@Column
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ScoreBadge(report.score, verdict, accent)
+                Spacer(Modifier.width(8.dp))
+                ActionPill(action, actionColor(action))
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "评分 ${report.score}/100",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             Spacer(Modifier.height(8.dp))
+            ScoreBar(report.score, accent)
+            Spacer(Modifier.height(10.dp))
 
+            Text(
+                text = report.actionReason,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+            Spacer(Modifier.height(10.dp))
+
+            val sim = report.simulation
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "净值 " + navText(row.fund.nav),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                if (estimate != null) {
-                    Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = growthText(estimate.percent),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (estimate.percent >= 0) market.up else market.down
+                        text = if (row.plan.enabled) "计划 · ${row.plan.cadenceText()}" else "还没设定投计划",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = if (row.plan.enabled) money(row.plan.amount) + " / 期" else "点开设置频率与金额",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
                     )
                 }
-                Spacer(Modifier.weight(1f))
-                if (report != null) {
-                    ActionPill(report.action, actionColor(report.action))
-                }
-            }
-
-            if (report != null) {
-                Spacer(Modifier.height(10.dp))
-                ScoreBar(report.score, verdictColor(report.verdict))
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = report.actionReason,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            val meta = buildList {
-                if (row.plan.enabled) {
-                    add(
-                        "月投 " + money(row.plan.monthlyAmount) + " · 已投 " +
-                            row.plan.periods() + " 期"
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = when {
+                            sim == null -> "—"
+                            sim.started -> "已投 ${sim.periods} 期 · 市值 ${money(sim.value)}"
+                            else -> "还没扣过款"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-                val holding = row.holding
-                if (holding != null) {
-                    val value = holding.marketValue(row.fund.nav)
-                    val pct = holding.profitPercent(row.fund.nav)
-                    add(
-                        "持仓 " + money(value) +
-                            (pct?.let { " · " + growthText(it) } ?: "")
-                    )
-                }
-            }
-            if (meta.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = meta.joinToString("　|　"),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (row.note.isNotBlank()) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = row.note,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-
-            Spacer(Modifier.height(2.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "基准日 " + (report?.asOf?.ifBlank { "—" } ?: "—") +
-                        if (report?.live == true) "（盘中）" else "",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                )
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onAskAi, enabled = report != null) {
-                    Text(if (row.plan.enabled) "AI 复核" else "AI 判断")
+                    if (sim != null && sim.started) {
+                        Text(
+                            text = growthText(sim.profitPct),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = growthColor(sim.profitPct)
+                        )
+                    }
                 }
             }
         }
@@ -527,77 +578,70 @@ private fun DcaCard(
 
 @Composable
 private fun ScoreBadge(score: Int, verdict: DcaVerdict, color: Color) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = color.copy(alpha = 0.12f),
-        contentColor = color
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+    Surface(shape = RoundedCornerShape(12.dp), color = color.copy(alpha = 0.14f)) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = score.toString(),
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = color
             )
-            Text(text = verdict.label, style = MaterialTheme.typography.labelSmall)
+            Spacer(Modifier.width(5.dp))
+            Text(
+                text = verdict.label,
+                style = MaterialTheme.typography.labelSmall,
+                color = color
+            )
         }
     }
 }
 
 @Composable
 private fun ScoreBar(score: Int, color: Color) {
-    Box(
+    LinearProgressIndicator(
+        progress = { score.coerceIn(0, 100) / 100f },
         modifier = Modifier
             .fillMaxWidth()
-            .height(6.dp)
-            .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth((score.coerceIn(0, 100) / 100f))
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(50))
-                .background(color)
-        )
-    }
+            .height(5.dp),
+        color = color,
+        trackColor = color.copy(alpha = 0.14f)
+    )
 }
 
 @Composable
 internal fun ActionPill(action: DcaAction, color: Color) {
-    Surface(
-        color = color.copy(alpha = 0.12f),
-        contentColor = color,
-        shape = RoundedCornerShape(50)
-    ) {
+    Surface(shape = RoundedCornerShape(10.dp), color = color.copy(alpha = 0.16f)) {
         Text(
             text = action.label,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
+            color = color,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
         )
     }
 }
 
 @Composable
 internal fun verdictColor(verdict: DcaVerdict): Color = when (verdict) {
-    DcaVerdict.GOOD -> MaterialTheme.colorScheme.primary
-    DcaVerdict.WATCH -> MaterialTheme.colorScheme.tertiary
-    DcaVerdict.POOR -> MaterialTheme.colorScheme.error
+    DcaVerdict.GOOD -> LocalMarketColors.current.up
+    DcaVerdict.WATCH -> Color(0xFFB07A16)
+    DcaVerdict.POOR -> LocalMarketColors.current.down
 }
 
 @Composable
 internal fun actionColor(action: DcaAction): Color = when (action) {
     DcaAction.START, DcaAction.CONTINUE -> MaterialTheme.colorScheme.primary
-    DcaAction.REDUCE, DcaAction.PAUSE -> MaterialTheme.colorScheme.tertiary
-    DcaAction.TAKE_PROFIT, DcaAction.STOP -> LocalMarketColors.current.down
+    DcaAction.REDUCE -> Color(0xFFB07A16)
+    DcaAction.PAUSE -> LocalMarketColors.current.down
+    DcaAction.TAKE_PROFIT -> Color(0xFFC2410C)
+    DcaAction.STOP -> MaterialTheme.colorScheme.error
 }
 
 @Composable
 private fun DcaSkeletonCard() {
-    val block = MaterialTheme.colorScheme.surfaceContainerHighest
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -605,33 +649,185 @@ private fun DcaSkeletonCard() {
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Box(
-                Modifier
-                    .fillMaxWidth(0.55f)
+                modifier = Modifier
                     .height(16.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(block)
+                    .fillMaxWidth(0.45f)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                        RoundedCornerShape(6.dp)
+                    )
             )
             Spacer(Modifier.height(12.dp))
             Box(
-                Modifier
-                    .fillMaxWidth(0.9f)
+                modifier = Modifier
                     .height(12.dp)
-                    .clip(RoundedCornerShape(5.dp))
-                    .background(block)
+                    .fillMaxWidth(0.9f)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                        RoundedCornerShape(6.dp)
+                    )
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(block)
+                modifier = Modifier
+                    .height(12.dp)
+                    .fillMaxWidth(0.65f)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                        RoundedCornerShape(6.dp)
+                    )
             )
         }
     }
 }
 
-private fun timeText(timestamp: Long): String {
-    if (timestamp <= 0L) return "—"
-    return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
+private fun timeText(timestamp: Long): String =
+    SimpleDateFormat("HH:mm", Locale.US).format(Date(timestamp))
+
+/**
+ * 「添加行业指数」底部弹层。
+ *
+ * 搜索链路复用详情页那套（腾讯 smartbox → 东财行情），但文案完全不同：那里是
+ * 「把这只基金的行情钉死」，这里是「我要观察这个行业」。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DcaIndexSheet(
+    state: TrackPickerState,
+    existing: Set<String>,
+    onQueryChange: (String) -> Unit,
+    onPick: (IndexEntry) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Text(
+                text = "添加行业指数",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "搜行业或主题，比如「白酒」「半导体」「红利」。指数比基金更适合判断定投价值：" +
+                    "它有十几年的日线，能算清长期趋势和位置，也不会被单只基金的规模、换手带偏。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = state.query,
+                onValueChange = onQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                placeholder = { Text("如 半导体 或 399975") },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                trailingIcon = if (state.searching) {
+                    {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                } else {
+                    null
+                }
+            )
+
+            if (state.message != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = state.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            when {
+                state.query.isBlank() -> {
+                    Text(
+                        text = "常用行业指数",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        DCA_SUGGESTIONS.forEach { entry ->
+                            SuggestionChip(
+                                onClick = { onPick(entry) },
+                                label = { Text(entry.name) }
+                            )
+                        }
+                    }
+                }
+
+                state.results.isEmpty() && !state.searching -> {
+                    Text(
+                        text = "没有搜到，换个关键词或直接输入 6 位指数代码",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                }
+
+                else -> {
+                    LazyColumn(modifier = Modifier.heightIn(max = 340.dp)) {
+                        items(items = state.results, key = { it.secid }) { entry ->
+                            val already = entry.secid in existing
+                            Column {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = !already) { onPick(entry) }
+                                        .padding(vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = entry.name,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(
+                                            text = "${entry.code}  ·  " + marketLabel(entry.market),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Spacer(Modifier.width(10.dp))
+                                    TextButton(onClick = { onPick(entry) }, enabled = !already) {
+                                        Text(
+                                            text = if (already) "已添加" else "添加",
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    }
+                                }
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -62,6 +62,9 @@ private const val SIGNAL_TICK_MS = 60_000L
 /** 非交易时段信号页重算间隔，只为发现「又开盘了 / 收盘定型了」。 */
 private const val SIGNAL_IDLE_TICK_MS = 5 * 60_000L
 
+/** 定投页重算间隔：看的是日线，两分钟问一次有没有新收盘就够。 */
+private const val DCA_TICK_MS = 2 * 60_000L
+
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -82,11 +85,7 @@ class MainActivity : ComponentActivity() {
                     key = "fund-limit",
                     factory = FundViewModel.factory(this, FundScope.LIMIT)
                 )
-                // 定投页自己的清单：和持仓、限购互不共享，但持仓记录仍读同一份。
-                val dcaFundViewModel: FundViewModel = viewModel(
-                    key = "fund-dca",
-                    factory = FundViewModel.factory(this, FundScope.DCA)
-                )
+                // 定投页维护的是一份指数清单（不是基金清单），自己一套 VM + 存储。
                 val dcaViewModel: DcaViewModel = viewModel(factory = DcaViewModel.factory(this))
                 val indexViewModel: IndexViewModel = viewModel(factory = IndexViewModel.factory(this))
                 val signalViewModel: SignalViewModel = viewModel(factory = SignalViewModel.factory(this))
@@ -101,9 +100,7 @@ class MainActivity : ComponentActivity() {
                 val limitHoldingSheet by limitViewModel.holdingSheet.collectAsStateWithLifecycle()
                 val indexState by indexViewModel.state.collectAsStateWithLifecycle()
 
-                val dcaFundState by dcaFundViewModel.state.collectAsStateWithLifecycle()
                 val dcaState by dcaViewModel.state.collectAsStateWithLifecycle()
-                val dcaHoldingSheet by dcaFundViewModel.holdingSheet.collectAsStateWithLifecycle()
 
                 var route by rememberSaveable { mutableStateOf("list") }
                 var tab by rememberSaveable { mutableStateOf(TAB_PORTFOLIO) }
@@ -144,7 +141,7 @@ class MainActivity : ComponentActivity() {
                 // 所以进持仓页时后台解析一次「基金 → 指数」，不再跟着估算轮询。
                 val lifecycle = LocalLifecycleOwner.current.lifecycle
                 LaunchedEffect(tab, route, lifecycle) {
-                    if (route != "list" && route != "dca") return@LaunchedEffect
+                    if (route != "list") return@LaunchedEffect
                     when (tab) {
                         TAB_PORTFOLIO -> lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                             indexViewModel.load()
@@ -158,12 +155,12 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // 定投页的估算跟持仓页同一套：卡片上的涨跌、持仓收益、止盈判断
-                        // 都要用到，所以也按 5 秒一轮走。
+                        // 定投页看的是指数日线，指标两分钟才需要重算一次；
+                        // K 线缓存本身也有 TTL，这里只是把「有没有新的收盘」问一下。
                         TAB_DCA -> lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                             while (true) {
-                                dcaFundViewModel.refreshEstimates()
-                                delay(if (isTradingTime()) LIST_TICK_MS else LIST_IDLE_TICK_MS)
+                                dcaViewModel.refresh()
+                                delay(DCA_TICK_MS)
                             }
                         }
 
@@ -176,18 +173,6 @@ class MainActivity : ComponentActivity() {
                                 delay(if (isTradingTime()) SIGNAL_TICK_MS else SIGNAL_IDLE_TICK_MS)
                             }
                         }
-                    }
-                }
-
-                // 定投详情页里记完一笔买卖，结论要跟着新的成本走 —— 列表页的
-                // 重算挂在 DcaScreen 里，详情页不在组合中，这里补一次。
-                LaunchedEffect(route, dcaFundState.holdings, dcaFundState.all) {
-                    if (route == "dca") {
-                        dcaViewModel.evaluate(
-                            dcaFundState.all,
-                            dcaFundState.holdings,
-                            dcaFundState.estimates
-                        )
                     }
                 }
 
@@ -325,64 +310,38 @@ class MainActivity : ComponentActivity() {
                     }
 
                     "dca" -> {
-                        val code = dcaState.selected
-                        val fund = dcaFundState.all.firstOrNull { it.code == code }
-                            ?: dcaState.rowOf(code)?.fund
-                        if (fund == null) {
+                        val secid = dcaState.selected
+                        val row = dcaState.rowOf(secid)
+                        if (row == null) {
                             LaunchedEffect(Unit) { route = "list" }
                         } else {
                             DcaDetailScreen(
-                                fund = fund,
-                                row = dcaState.rowOf(fund.code),
-                                estimate = dcaFundState.estimates[fund.code],
-                                advice = dcaState.advice[fund.code],
-                                holding = dcaFundState.holdings[fund.code]
-                                    ?.takeUnless { it.isEmpty },
-                                aiLoading = dcaState.aiLoading == fund.code,
-                                aiError = dcaState.aiError[fund.code],
+                                row = row,
+                                advice = dcaState.advice[secid],
+                                aiLoading = dcaState.aiLoading == secid,
+                                aiError = dcaState.aiError[secid],
                                 onBack = {
                                     dcaViewModel.closeDetail()
                                     route = "list"
                                 },
-                                onAskAi = { dcaViewModel.askAi(fund.code) },
+                                onAskAi = { dcaViewModel.askAi(secid) },
                                 onEditPlan = {
-                                    planSheetCode = fund.code
-                                    planSheetName = fund.name
+                                    planSheetCode = secid
+                                    planSheetName = row.displayName
                                 },
                                 onRemove = {
-                                    // 只从定投清单移除，持仓记录留在原处。
-                                    dcaFundViewModel.removeFromList(fund.code)
-                                    dcaViewModel.forget(fund.code)
+                                    dcaViewModel.removeIndex(secid)
+                                    planSheetCode = null
                                     route = "list"
                                 },
-                                onBuy = { dcaFundViewModel.openHoldingSheet(fund, HoldingMode.BUY) },
-                                onSell = { dcaFundViewModel.openHoldingSheet(fund, HoldingMode.SELL) },
-                                onEditHolding = {
-                                    dcaFundViewModel.openHoldingSheet(fund, HoldingMode.EDIT)
-                                },
-                                onRemoveHolding = { dcaFundViewModel.removeHolding(fund.code) }
+                                onClearAiError = { dcaViewModel.clearAiError(secid) }
                             )
-
-                            if (dcaHoldingSheet.open) {
-                                HoldingSheet(
-                                    state = dcaHoldingSheet,
-                                    onModeChange = dcaFundViewModel::onHoldingModeChange,
-                                    onSharesChange = dcaFundViewModel::onHoldingSharesChange,
-                                    onCostChange = dcaFundViewModel::onHoldingCostChange,
-                                    onAmountChange = dcaFundViewModel::onHoldingAmountChange,
-                                    onNavChange = dcaFundViewModel::onHoldingNavChange,
-                                    onFillAll = dcaFundViewModel::fillAllShares,
-                                    onSubmit = dcaFundViewModel::submitHolding,
-                                    onDismiss = dcaFundViewModel::closeHoldingSheet,
-                                    onCostInputChange = dcaFundViewModel::onHoldingCostInputChange
-                                )
-                            }
 
                             val sheetCode = planSheetCode
                             if (sheetCode != null) {
                                 DcaPlanSheet(
-                                    fundName = planSheetName,
-                                    initial = dcaState.plans[sheetCode] ?: DcaPlan(),
+                                    indexName = planSheetName,
+                                    initial = dcaState.plans[sheetCode] ?: DcaPlan.defaultFor(),
                                     onSave = { plan ->
                                         dcaViewModel.savePlan(sheetCode, plan)
                                         planSheetCode = null
@@ -395,11 +354,10 @@ class MainActivity : ComponentActivity() {
 
                     else -> when (tab) {
                         TAB_DCA -> DcaScreen(
-                            fundViewModel = dcaFundViewModel,
-                            dcaViewModel = dcaViewModel,
+                            viewModel = dcaViewModel,
                             onOpenSettings = openSettings,
-                            onOpenDetail = { fund ->
-                                dcaViewModel.openDetail(fund.code)
+                            onOpenDetail = { row ->
+                                dcaViewModel.openDetail(row.secid)
                                 route = "dca"
                             },
                             bottomBar = bottomBar

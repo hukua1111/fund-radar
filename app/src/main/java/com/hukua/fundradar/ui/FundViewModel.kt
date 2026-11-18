@@ -399,25 +399,6 @@ class FundViewModel(
         }
     }
 
-    /**
-     * 只把基金从当前清单里拿掉，不动持仓、也不清掉手动指定的跟踪指数。
-     *
-     * 定投页用这个：同一只基金可能同时在持仓页里真金白银地持有，从定投清单移除
-     * 只是「不按计划投了」，不是「清仓」。
-     */
-    fun removeFromList(code: String) {
-        repository.remove(code)
-        _detail.value = null
-        _state.update { current ->
-            current.copy(
-                all = current.all.filterNot { it.code == code },
-                changes = current.changes.filterNot { it.code == code },
-                estimates = current.estimates - code,
-                watchlistEmpty = repository.codes().isEmpty()
-            ).derive()
-        }
-    }
-
     /** Fills an empty limit watchlist with everything the user holds. */
     fun importPortfolio() {
         viewModelScope.launch {
@@ -442,7 +423,7 @@ class FundViewModel(
      * 目录、偶尔还要联网，放到后面补，最多等几秒，拿不到就十分钟后再试。
      */
     fun refreshEstimates() {
-        if (!scope.wantsEstimate) return
+        if (!scope.isPortfolio) return
         val funds = _state.value.all
         if (funds.isEmpty()) return
         estimateJob?.cancel()
@@ -753,7 +734,7 @@ class FundViewModel(
                             holdings = holdingStore.all()
                         ).derive()
                     }
-                    if (scope.wantsEstimate) refreshEstimates()
+                    if (scope.isPortfolio) refreshEstimates()
                 }
                 .onFailure { throwable ->
                     _state.update {
